@@ -4,7 +4,7 @@
 
 namespace ui {
 
-// Cross-platform TypeTide brand and semantic colors. Native Win32 controls
+// TypeTide-Win brand and semantic colors. Native Win32 controls
 // retain system behavior while custom-drawn surfaces share these tokens.
 constexpr COLORREF Accent = RGB(0x7C, 0x5C, 0xFF);
 constexpr COLORREF AccentText = RGB(0xFF, 0xFF, 0xFF);
@@ -13,6 +13,26 @@ constexpr COLORREF WarningLight = RGB(0xD9, 0x77, 0x06);
 constexpr COLORREF WarningDark = RGB(0xFF, 0xA5, 0x4C);
 constexpr COLORREF DangerLight = RGB(0xC4, 0x2B, 0x1C);
 constexpr COLORREF DangerDark = RGB(0xFF, 0x6B, 0x62);
+
+inline COLORREF accent(bool dark, bool highContrast = false) {
+    return highContrast ? GetSysColor(COLOR_HIGHLIGHT) : dark ? RGB(0xB2, 0xA2, 0xFF) : RGB(0x65, 0x59, 0xD8);
+}
+
+class SolidBrush {
+public:
+    ~SolidBrush() { if (handle_) DeleteObject(handle_); }
+    HBRUSH get(COLORREF color) {
+        if (!handle_ || color != color_) {
+            if (handle_) DeleteObject(handle_);
+            handle_ = CreateSolidBrush(color);
+            color_ = color;
+        }
+        return handle_;
+    }
+private:
+    HBRUSH handle_ = nullptr;
+    COLORREF color_ = 0;
+};
 
 namespace spacing {
 constexpr int XSmall = 4;
@@ -58,15 +78,15 @@ inline Palette palette(bool dark, bool highContrast = false) {
                 GetSysColor(COLOR_HIGHLIGHT)};
     }
     if (dark) {
-        return {RGB(0x20, 0x20, 0x22), RGB(0x2B, 0x2B, 0x2E),
-                RGB(0xF2, 0xF2, 0xF4), RGB(0xB0, 0xB0, 0xB8),
-                RGB(0x45, 0x45, 0x4A), RGB(0x3A, 0x3A, 0x3F),
-                RGB(0x55, 0x55, 0x5A), WarningDark, DangerDark};
+        return {RGB(0x19, 0x20, 0x2D), RGB(0x21, 0x2A, 0x3A),
+                RGB(0xEF, 0xF3, 0xFC), RGB(0xB2, 0xBF, 0xD5),
+                RGB(0x36, 0x43, 0x5A), RGB(0x2C, 0x38, 0x4D),
+                RGB(0x4C, 0x5D, 0x78), WarningDark, DangerDark};
     }
-    return {RGB(0xF3, 0xF3, 0xF3), RGB(0xFF, 0xFF, 0xFF),
-            RGB(0x20, 0x20, 0x24), RGB(0x67, 0x67, 0x72),
-            RGB(0xE4, 0xE4, 0xE8), RGB(0xF2, 0xF2, 0xF5),
-            RGB(0xD5, 0xD5, 0xDA), WarningLight, DangerLight};
+    return {RGB(0xF6, 0xF8, 0xFC), RGB(0xFF, 0xFF, 0xFF),
+            RGB(0x24, 0x30, 0x46), RGB(0x60, 0x6E, 0x84),
+            RGB(0xE2, 0xE7, 0xF0), RGB(0xF0, 0xF3, 0xFA),
+            RGB(0xCF, 0xD8, 0xE7), WarningLight, DangerLight};
 }
 
 inline bool highContrastEnabled() {

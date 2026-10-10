@@ -1,0 +1,72 @@
+name: Windows Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'wadaxiyang/typetide-win'
+    runs-on: windows-2022
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag, version and fork update URLs
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/check-release.ps1 -Tag $env:RELEASE_TAG
+
+      - name: Build, self-test, regressions and package
+        run: ./windows/scripts/build-release.ps1
+
+      - name: Verify packaged version and create checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/check-release.ps1 -Tag $env:RELEASE_TAG -Executable windows/build/TypeTide-Win.exe
+          $version = (Get-Content VERSION -Raw).Trim()
+          $files = @("windows/build/TypeTide-Win-Setup-$version.exe", "windows/build/TypeTide-Win-Windows-$version.zip")
+          $lines = foreach ($file in $files) {
+            $hash = Get-FileHash -LiteralPath $file -Algorithm SHA256
+            "$($hash.Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($file))"
+          }
+          $lines | Set-Content windows/build/SHA256SUMS.txt -Encoding utf8NoBOM
+
+      - name: Publish GitHub Release after all checks pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content VERSION -Raw).Trim()
+          $notes = "docs/releases/$env:RELEASE_TAG.md"
+          if (-not (Test-Path $notes)) { throw "Missing release notes: $notes" }
+          $assets = @("windows/build/TypeTide-Win-Setup-$version.exe", "windows/build/TypeTide-Win-Windows-$version.zip", 'windows/build/SHA256SUMS.txt')
+          $existing = gh release view $env:RELEASE_TAG --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if (-not ($existing | ConvertFrom-Json).isDraft) { throw 'This release is already published; refusing to replace its assets.' }
+            gh release upload $env:RELEASE_TAG @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed' }
+            gh release edit $env:RELEASE_TAG --title "TypeTide-Win $version" --notes-file $notes
+            if ($LASTEXITCODE -ne 0) { throw 'Release notes update failed' }
+          } else {
+            gh release create $env:RELEASE_TAG @assets --verify-tag --draft --title "TypeTide-Win $version" --notes-file $notes
+            if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
+          }
+          gh release edit $env:RELEASE_TAG --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }

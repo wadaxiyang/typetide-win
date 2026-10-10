@@ -1,76 +1,48 @@
-# TypeTide — Agent Guide
+# TypeTide-Win — Agent Guide
 
-System-wide **AI translation + inline rewrite**, native on two platforms:
+Windows-only system-wide **AI translation + inline rewrite**, implemented as a
+native Win32 C++20 tray app with CMake and no third-party runtime dependencies.
 
-- `macos/` — SwiftUI menu-bar app (Xcode project)
-- `windows/` — Win32 C++20 tray app (CMake, no third-party deps)
+- Project: https://github.com/wadaxiyang/typetide-win
+- Upstream reference: https://github.com/everettjf/typetide (everettjf)
+- Preserve the upstream MIT copyright. Icon source: `windows/assets/brand.svg`;
+  regenerate native paths and transparent ICO after changing the SVG.
 
-Both do the same two things:
-
-- **Read**: select text → shortcut / floating icon / auto → translation popup.
-- **Write**: type in native language → shortcut → translated & replaced in place.
-
-## Shared architecture
+Read: select text → shortcut / floating icon / auto → translation popup.
+Write: type in your native language → shortcut → translated and replaced in place.
 
 ```
-Shortcut / SelectionMonitor ─► SelectionCapture ─► TranslationService ─► provider
-                                      │                                     │
-                              Popup / TextReplacer  ◄──────────── streamed result
+Shortcut / SelectionMonitor → SelectionCapture → Translator → provider
+                                  Popup / TextReplacer ← streamed result
 ```
 
 Backends: Ollama (default `http://127.0.0.1:11434`) or any OpenAI-compatible
-endpoint (`/chat/completions`, SSE streaming). 10 languages, native/foreign
-pair, per-shortcut direction (auto-detect or fixed), 4 rewrite styles.
-
-## macOS (`macos/`)
-
-- `Core/` — `SelectionCapture` (AX `kAXSelectedText` + synthetic-⌘C fallback, restores clipboard), `TextReplacer` (synthetic paste, undo-safe), `TriggerController` (orchestrates read/write), `SelectionMonitor` (global mouse-up → AX selection), `PopupPositioner`, `Keyboard`, `Pasteboard`, `AccessibilityPermission`, `LaunchAtLogin`.
-- `Translation/` — `TranslationProvider` protocol; `OllamaProvider`, `OpenAIProvider` (SSE); `TranslationService` (routing + cache + style); `TranslationCache`; `OllamaModelResolver` (auto-pick installed model).
-- `UI/` — `TranslationPopupView` + `PopupController`, `SelectionIconWindow`.
-- `Config/` — `AppSettings` (single source of truth, UserDefaults-backed), `LanguageConfig`.
-- `Services/` — `GlobalShortcutCenter` (Carbon, multi-hotkey), `UpdateChecker`, `SystemServiceProvider`.
-- `Views/` — `MenuBarView`, `SettingsView/*` (General, Behavior, Backend, Language, Models, Shortcuts, Skip Apps, About).
-
-### Conventions & gotchas
-
-- **No sandbox** (`TypeTide.entitlements` empty) — needs Accessibility + CGEvent posting. `LSUIElement = true` (menu-bar only).
-- **Sign dev builds** (Apple Development team is configured) so the Accessibility grant persists across rebuilds; an unsigned/ad-hoc build’s grant won’t stick.
-- Carbon hotkeys fire without Accessibility, but capture/replace are guarded by `AccessibilityPermission.isGranted`.
-- Read direction: detected → `LanguageConfig.sourceLanguage` (native). Write: native → `targetLanguage`.
-- Settings via `@AppStorage(AppSettings.Keys.*)`; behavior changes call `TriggerController.shared.applyEnabledState()`.
-
-### Build
-
-```bash
-cd macos
-xcodebuild -scheme TypeTide -configuration Debug build   # signed
-./scripts/build-release.sh                              # notarized DMG (needs .env)
-```
+`/chat/completions` endpoint with SSE streaming. Ten languages, configurable
+native/foreign direction, and four rewrite styles.
 
 ## Windows (`windows/`)
 
 Pure Win32 + WinHTTP + UI Automation, C++20, CMake + Ninja, zero third-party
 dependencies (tiny JSON parser included in `src/Json.h`).
 
-- `src/App.*` — orchestrator (TriggerController equivalent), owns the message-only window that receives hotkeys and worker notifications.
+- `src/App.*` — orchestrator, owns the message-only window that receives hotkeys and worker notifications.
 - `src/SelectionCapture.*` — UI Automation TextPattern selection + synthetic Ctrl+C clipboard fallback (clipboard always restored); also returns the selection's screen rect for popup anchoring.
 - `src/TextReplacer.*` — synthetic Ctrl+V paste (undo-safe), clipboard restored after.
-- `src/Translator.*` — provider interface; Ollama NDJSON + OpenAI SSE streaming over WinHTTP; in-memory LRU cache. Ollama requests send `"think": false` (retry without on 400) — thinking models (qwen3 family) otherwise stall for minutes on hidden reasoning.
-- `src/OllamaModels.*` — `/api/tags` model list (settings dropdown) + auto-replace an uninstalled configured model at startup.
+- `src/Translator.*` — ordered provider routing over WinHTTP; `ProviderProtocol.*` builds requests and parses Ollama NDJSON / OpenAI / Anthropic / Gemini SSE; in-memory LRU cache. Ollama requests send `"think": false` (retry without on 400) — thinking models (qwen3 family) otherwise stall for minutes on hidden reasoning.
+- `src/OllamaModels.*` — legacy model discovery and primary Ollama preload. Managed provider entries are never silently rewritten.
 - `src/Language.*` — 10 languages, prompts, detection (script ranges + Latin stopword scoring).
-- `src/PopupWindow.*` — streaming translation popup (Copy / Replace, Esc / click-outside dismiss).
+- `src/PopupWindow.*` — translation popup with loading state and atomic result display (Copy / Replace, Esc / click-outside dismiss).
 - `src/SelectionIcon.*` / `src/SelectionMonitor.*` — floating icon & auto-translate triggers (WH_MOUSE_LL).
-- `src/SettingsWindow.*` — native settings dialog (tabs: General, Backend, Language, Shortcuts, Behavior, About).
-- `src/Settings.*` — JSON settings at `%APPDATA%\TypeTide\settings.json`.
+- `src/SettingsWindow.*` — native six-page sidebar: General, Providers, Translation, Shortcuts & triggers, Excluded apps, About & diagnostics. Provider edits use Save/Cancel; priority moves save immediately.
+- `src/Settings.*` — JSON settings at `%APPDATA%\TypeTide-Win\settings.json`.
 - `src/TrayIcon.*`, `src/Hotkeys.*`, `src/LaunchAtLogin.*` (HKCU Run key), `src/UpdateChecker.*`.
 
 ### Conventions & gotchas
 
 - All UI on the main thread, and the main thread NEVER sleeps (a stalled message loop gets WH_*_LL hooks silently removed). Waiting work (clipboard-fallback capture, paste replace, HTTP) lives on worker threads posting `WM_APP_*` messages with heap payloads (receiver frees).
-- Workers must not read `Settings::shared()` — snapshot config on the main thread and pass it in (see `BackendConfig` in Translator.cpp, `FetchInstalledAsync`).
-- Paste replace uses clipboard delayed rendering (WM_RENDERFORMAT = "target consumed the paste"); settings saves are atomic (tmp+rename); crashes dump minidumps to `%APPDATA%\TypeTide\crashes`.
+- Workers must not read `Settings::shared()` — snapshot config on the main thread and pass it in (see `StreamWithProviders` and `FetchInstalledAsync`).
+- Paste replace uses clipboard delayed rendering (WM_RENDERFORMAT = "target consumed the paste"); settings saves are atomic (tmp+rename); crashes dump minidumps to `%APPDATA%\TypeTide-Win\crashes`.
 - `RegisterHotKey` fails if another app owns the combo — surface it, don't crash.
-- Keep feature parity with macOS where it makes sense; follow Windows conventions where they differ (tray vs menu bar, Alt vs ⌥, registry Run key vs SMAppService).
 
 ### Build
 
@@ -81,31 +53,27 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build
 
 ## Releases
 
-Both platforms share ONE version: the root `VERSION` file, synced everywhere by
-`scripts/bump-version.sh` (default patch+1; `--minor` / `--major` / explicit).
-It writes pbxproj MARKETING_VERSION, windows CMakeLists/rc/manifest — when
-touching the manifest remember only the app's own assemblyIdentity may change;
-the Common-Controls `version="6.0.0.0"` must stay or the exe fails SxS at start.
+The root `VERSION` file is the version source. Run `scripts/bump-version.ps1`
+(default patch +1, `-Minor`, `-Major`, or `-Version 1.2.3`) to sync
+`windows/CMakeLists.txt`, `windows/src/TypeTide-Win.rc`, and the app's own
+assemblyIdentity in `windows/src/TypeTide-Win.manifest`. The Common-Controls
+`version="6.0.0.0"` must stay unchanged or the executable fails to start.
 
-Release per platform, either order, onto the same `vX.Y.Z` tag:
-- `scripts/release-windows.ps1` (on Windows) → builds via
-  `windows/scripts/build-release.ps1` (Release exe + self-test gate + Inno
-  Setup installer from `windows/installer/TypeTide.iss` + portable zip), then
-  `gh release create`-if-missing + upload.
-- `scripts/release-macos.sh` (on a Mac) → notarized DMG via
-  `macos/scripts/build-release.sh`, then create-if-missing + upload
-  `TypeTide-X.Y.Z.dmg`.
-Both need `gh auth login` once. `UpdateChecker` (both apps) reads
-`releases/latest` at `everettjf/typetide`.
+`scripts/release-windows.ps1` builds via `windows/scripts/build-release.ps1`
+(Release executable, self-test gate, Inno Setup installer, portable ZIP), then
+publishes to `wadaxiyang/typetide-win`. It requires `gh auth login`.
+UpdateChecker reads this fork's `releases/latest` endpoint.
 
-Keep `README.md` free of the app's release version — link to `../../releases`,
-refer to artifacts as `TypeTide-Setup-x.y.z.exe` / `build/TypeTide.dmg` style,
-never a pinned literal version. Platform/dependency versions (macOS 26+,
-Windows 10+, Swift 5.9+, C++20) are fine.
+Keep README files free of pinned app release versions. Link to `../../releases`
+and use placeholder names such as `TypeTide-Win-Setup-x.y.z.exe`.
 
 ## Current Product Priorities
 
-- Use **TypeTide** consistently in repository metadata, update feeds, documentation, UI, package names, and website copy; treat Saypick only as historical naming.
-- Track selection-capture success, replacement success, time to first translated token, total latency, cancellation, and provider failure locally during development without collecting user text.
-- Keep Ollama as a first-class offline path and make network-provider use obvious before selected text leaves the device.
-- Maintain parity tests for language direction, smart detection, prompt construction, streaming assembly, and clipboard restoration on macOS and Windows.
+- Use **TypeTide-Win** consistently in UI, package names, metadata, and documentation.
+- Keep project/update/support links on the fork; label upstream links as references.
+- Track capture/replacement success, first-token/total latency, cancellation and
+  provider failure locally during development without collecting user text.
+- Keep Ollama a first-class offline path and make network-provider use obvious
+  before selected text leaves the device.
+- Maintain regression tests for language direction, detection, prompts, streaming
+  assembly, and clipboard restoration. Keep `contracts/translation-contracts.json`.

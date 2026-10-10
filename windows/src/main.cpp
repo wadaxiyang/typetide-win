@@ -4,6 +4,7 @@
 //
 #include <windows.h>
 #include "App.h"
+#include "SettingsWindow.h"
 #include "CrashDump.h"
 #include "SelfTest.h"
 #include <objbase.h>
@@ -39,7 +40,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         return runSelfTest(args.find(L"--selftest-translate") != std::wstring::npos);
 
     // 单实例：已在运行则让它打开设置窗口
-    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\TypeTideSingleInstance");
+    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\TypeTide-WinSingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         if (HWND existing = FindWindowW(kAppWindowClass, nullptr))
             PostMessageW(existing, WM_APP_OPEN_SETTINGS, 0, 0);
@@ -50,6 +51,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (SettingsWindow::processMessage(&msg)) continue;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

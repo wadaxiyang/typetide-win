@@ -1,5 +1,5 @@
 //
-//  Language.h — 语言定义、提示词与检测（对应 macOS 的 LanguageConfig）。
+//  Language.h — 语言定义、提示词与检测。
 //
 #pragma once
 #include <optional>
@@ -47,7 +47,7 @@ inline constexpr Language All[] = {
     Language::Portuguese, Language::Indonesian,
 };
 
-/// 序列化用短代码（"en"…），与 macOS 侧一致
+/// 序列化用短代码（"en"…）
 const char* Code(Language l);
 std::optional<Language> FromCode(const std::string& code);
 

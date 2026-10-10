@@ -9,7 +9,7 @@ namespace replacer {
 
 namespace {
 
-constexpr wchar_t kOwnerClass[] = L"TypeTideClipboardOwner";
+constexpr wchar_t kOwnerClass[] = L"TypeTide-WinClipboardOwner";
 
 struct RenderContext {
     const std::wstring* text = nullptr;

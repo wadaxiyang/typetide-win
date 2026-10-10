@@ -1,5 +1,5 @@
 //
-//  TrayIcon.h — 系统托盘图标与菜单（对应 macOS 的 MenuBarView）。
+//  TrayIcon.h — 系统托盘图标与菜单。
 //
 #pragma once
 #include <windows.h>

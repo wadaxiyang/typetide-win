@@ -1,5 +1,5 @@
 //
-//  LaunchAtLogin.h — 开机自启（HKCU Run 键，对应 macOS 的 SMAppService）。
+//  LaunchAtLogin.h — 开机自启（HKCU Run 键）。
 //
 #pragma once
 

@@ -1,5 +1,5 @@
 //
-//  App.h — 主编排（对应 macOS 的 TriggerController + AppDelegate）：
+//  App.h — 主编排：
 //  隐藏主窗口接收热键 / 托盘 / 工作线程消息，串起取词 → 翻译 → 弹窗/替换。
 //
 #pragma once
@@ -23,7 +23,7 @@ constexpr UINT WM_APP_MODELS = WM_APP + 7;          // lParam=std::vector<std::w
 constexpr UINT WM_APP_READ_CAPTURED = WM_APP + 8;   // lParam=capture::Capture*（可空；接收方释放）
 constexpr UINT WM_APP_REWRITE_CAPTURED = WM_APP + 9;// 同上
 
-constexpr wchar_t kAppWindowClass[] = L"TypeTideApp";
+constexpr wchar_t kAppWindowClass[] = L"TypeTide-WinApp";
 
 class App {
 public:

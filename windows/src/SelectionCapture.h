@@ -1,5 +1,5 @@
 //
-//  SelectionCapture.h — 取词（对应 macOS 的 SelectionCapture）。
+//  SelectionCapture.h — 取词。
 //  优先 UI Automation TextPattern 选区，兜底模拟 Ctrl+C 复制并还原剪贴板。
 //
 //  线程约定：UIA* 系列在主线程调用（快，无睡眠）；

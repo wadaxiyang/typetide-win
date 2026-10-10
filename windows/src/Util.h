@@ -44,7 +44,7 @@ inline std::wstring ToLower(std::wstring s) {
     return s;
 }
 
-/// %APPDATA%\TypeTide 目录（不存在则创建）。
+/// %APPDATA%\TypeTide-Win 目录（不存在则创建）。
 /// TYPETIDE_DATA_DIR 环境变量可覆盖（自检/测试用，避免污染真实设置）。
 inline std::wstring AppDataDir() {
     wchar_t buf[MAX_PATH]{};
@@ -55,7 +55,7 @@ inline std::wstring AppDataDir() {
     }
     n = GetEnvironmentVariableW(L"APPDATA", buf, MAX_PATH);
     std::wstring dir = (n && n < MAX_PATH) ? buf : L".";
-    dir += L"\\TypeTide";
+    dir += L"\\TypeTide-Win";
     CreateDirectoryW(dir.c_str(), nullptr);
     return dir;
 }

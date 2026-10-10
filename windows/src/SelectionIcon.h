@@ -1,6 +1,6 @@
 //
 //  SelectionIcon.h — 划词后贴着选区显示的小图标，点击触发翻译。
-//  （对应 macOS 的 SelectionIconWindow）
+//
 //
 #pragma once
 #include <windows.h>

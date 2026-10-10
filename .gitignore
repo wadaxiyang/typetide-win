@@ -1,20 +1,5 @@
-# Build artifacts
+# Windows build artifacts
 build/
-*.xcarchive
-*.ipa
-*.app
-*.dmg
-*.pkg
-
-# Xcode
-macos/TypeTide.xcodeproj/project.xcworkspace/xcuserdata
-macos/TypeTide.xcodeproj/project.xcworkspace/xcshareddata
-*.xcuserstate
-xcuserdata/
-DerivedData/
-
-# Windows
-windows/build/
 windows/out/
 *.exe
 *.obj
@@ -24,24 +9,9 @@ windows/out/
 .vs/
 CMakeUserPresets.json
 
-# macOS
-.DS_Store
+# Editor and Python caches
 *.swp
-*~.nib
+__pycache__/
 
-# CocoaPods
-Pods/
-
-# Carthage
-Carthage/Build/
-
-# SPM
-.swiftpm/
-
-# fastlane
-fastlane/report.xml
-fastlane/Preview.html
-fastlane/screenshots/**/*.png
-fastlane/test_output
 # Secrets
 .env

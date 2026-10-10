@@ -56,6 +56,7 @@ std::vector<std::wstring> ListInstalled(const std::string& host, int port, std::
 void FetchInstalledAsync(HWND notify, UINT message) {
     // Settings 快照在调用（主）线程拍好，工作线程只碰局部拷贝
     const Settings& s = Settings::shared();
+    if (s.providersConfigured) return; // Managed provider entries are never silently rewritten.
     std::string host = s.ollamaHost;
     int port = s.ollamaPort;
 
@@ -67,12 +68,11 @@ void FetchInstalledAsync(HWND notify, UINT message) {
 
 void PreloadAsync() {
     const Settings& s = Settings::shared();
-    if (s.backend != TranslationBackend::Ollama || s.ollamaModel.empty()) return;
-    const std::string host = s.ollamaHost;
-    const int port = s.ollamaPort;
-    const std::string model = s.ollamaModel;
-
-    std::thread([host, port, model] {
+    const auto configs = s.effectiveProviders();
+    if (configs.empty() || configs.front().kind != TranslationBackend::Ollama || configs.front().model.empty()) return;
+    const auto provider = configs.front();
+    std::thread([provider] {
+        const auto& model = provider.model;
         json::Object body;
         body["model"] = model;
         body["prompt"] = "";
@@ -80,7 +80,7 @@ void PreloadAsync() {
         body["keep_alive"] = "10m";
         body["think"] = false;
         std::atomic<bool> cancel{false};
-        const std::wstring url = util::Widen(host) + L":" + std::to_wstring(port) + L"/api/generate";
+        const std::wstring url = util::Widen(provider.baseURL) + L"/api/generate";
         http::Result r = http::PostStream(url, json::Value(std::move(body)).dump(), L"",
                                           [](const char*, size_t) {}, cancel);
         if (!r.ok) util::Log("ollama preload failed: %s", r.error.c_str());
@@ -89,7 +89,7 @@ void PreloadAsync() {
 
 bool ApplyResolvedModels(const std::vector<std::wstring>& installed) {
     Settings& s = Settings::shared();
-    if (s.backend != TranslationBackend::Ollama || installed.empty()) return false;
+    if (s.providersConfigured || s.backend != TranslationBackend::Ollama || installed.empty()) return false;
 
     std::wstring configured = util::Widen(s.ollamaModel);
     // "qwen2.5:3b" 与 ":latest" 变体宽松匹配

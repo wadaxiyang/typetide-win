@@ -3,7 +3,7 @@
 param([string]$SyncFile = "$env:TEMP\typetide-wpf-sync.txt")
 Add-Type -AssemblyName PresentationFramework
 $window = New-Object System.Windows.Window
-$window.Title = "TypeTideWpfHost"
+$window.Title = "TypeTide-WinWpfHost"
 $window.Width = 600
 $window.Height = 300
 $window.WindowStartupLocation = "CenterScreen"

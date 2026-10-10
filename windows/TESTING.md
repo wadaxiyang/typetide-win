@@ -7,7 +7,7 @@ machine. Keep the app data isolated while testing:
 $env:TYPETIDE_DATA_DIR = "$env:TEMP\typetide-rc"
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-build\TypeTide.exe --selftest
+build\TypeTide-Win.exe --selftest
 ```
 
 ## Automated gates
@@ -23,14 +23,14 @@ build\TypeTide.exe --selftest
 
 ## Manual gates
 
-- Fresh launch stays in first-run mode until **Test connection** succeeds and
+- Fresh launch stays in first-run mode until **Test selected** succeeds and
   **Verify shortcuts** confirms at least one configured shortcut and every
   configured shortcut is registered.
 - Defaults are `Alt+D` (smart popup) and `Alt+R` (smart replace). Exercise all
   six action choices: smart/native/foreign × popup/replace, plus at least one
   combination that includes the Windows key.
 - Assign the same combination to both shortcuts: the UI rejects it. Reserve a
-  shortcut in another app: TypeTide reports it unavailable without crashing.
+  shortcut in another app: TypeTide-Win reports it unavailable without crashing.
 - Clear either shortcut: the other still works and verification succeeds. Clear
   both: neither is registered, verification warns that at least one is required,
   and restoring defaults brings back Alt+D / Alt+R.
@@ -38,19 +38,35 @@ build\TypeTide.exe --selftest
   Confirm Copy, Replace, Escape/click-outside cancellation, and Ctrl+Z undo.
 - Switch Windows between light and dark mode while Settings is open. Navigation,
   fields, labels, popup, and title bar remain legible and update without restart.
-- Verify Ollama model discovery, missing-model auto-selection, preload, and a
+- Verify explicit Ollama model configuration, primary preload, and a
   qwen3-family translation without a hidden-reasoning stall.
 - Verify one OpenAI-compatible SSE endpoint, including an invalid key and an
   unreachable host. Errors are visible and the main UI remains responsive.
-- Open Diagnostics: export valid JSON, confirm it contains no user text, URL,
+- Open About & diagnostics: export valid JSON, confirm it contains no user text, URL,
   key, app name, or clipboard content, then clear it successfully.
 - Enable an excluded executable and confirm shortcuts/selection triggers do
   nothing there. Toggle launch at login and verify the HKCU Run entry behavior.
 - Restart Explorer and confirm the tray icon returns. Suspend/resume and repeat
   both shortcuts to catch low-level hook removal.
-- Install with `TypeTide-Setup-x.y.z.exe`, launch, upgrade over it, uninstall,
+- Install with `TypeTide-Win-Setup-x.y.z.exe`, launch, upgrade over it, uninstall,
   and smoke-test the portable zip. No admin prompt is expected.
 
 Record Windows version, architecture, DPI/scaling, backend/model, and the exact
-failed row for every issue. Attach `%APPDATA%\TypeTide\crashes` minidumps when
+failed row for every issue. Attach `%APPDATA%\TypeTide-Win\crashes` minidumps when
 present; never attach settings or diagnostic data without reviewing it first.
+
+
+## Ordered provider routing
+
+Run `ctest --test-dir windows/build --output-on-failure` after building. The
+`provider-routing` suite runs a temporary loopback HTTP server and tests all four
+native API formats, authentication headers, fragmented streaming, HTTP failures,
+incomplete responses, ordered fallback, no partial-result contamination,
+primary recovery, cache invalidation after reordering, cancellation, persisted
+provider order and legacy settings migration. It does not contact cloud services.
+The executable refuses to run without an isolated `TYPETIDE_DATA_DIR`.
+
+Manual checks: add two providers, edit and cancel a draft, select and move rows
+up/down, restart and confirm the priority order, remove a row, and use Test selected.
+Check both appearance modes, keyboard Tab navigation, empty-list guidance and
+validation errors. Test selected must never silently succeed via another provider.

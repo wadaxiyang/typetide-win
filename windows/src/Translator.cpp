@@ -3,6 +3,7 @@
 #include "Json.h"
 #include "LocalDiagnostics.h"
 #include "Settings.h"
+#include "ProviderProtocol.h"
 #include "Util.h"
 #include <atomic>
 #include <condition_variable>
@@ -94,14 +95,13 @@ class LineAssembler {
 public:
     /// 喂入一块字节，产出完整行（不含换行符）
     void feed(const char* data, size_t len, const std::function<void(const std::string&)>& onLine) {
-        // 容忍流最前面的 UTF-8 BOM
-        if (buf_.empty() && !bomChecked_ && len >= 3 &&
-            (unsigned char)data[0] == 0xEF && (unsigned char)data[1] == 0xBB && (unsigned char)data[2] == 0xBF) {
-            data += 3;
-            len -= 3;
-        }
-        bomChecked_ = true;
         buf_.append(data, len);
+        // A BOM may itself be split across network chunks.
+        if (!bomChecked_) {
+            if (buf_.size() < 3) return;
+            if (buf_.compare(0, 3, "\xEF\xBB\xBF") == 0) buf_.erase(0, 3);
+            bomChecked_ = true;
+        }
         size_t pos;
         while ((pos = buf_.find('\n')) != std::string::npos) {
             std::string line = buf_.substr(0, pos);
@@ -128,22 +128,6 @@ private:
 // 工作线程绝不直接读 Settings::shared()（主线程同时改设置会数据竞争），
 // 发起请求时在调用线程拍快照带走。
 
-struct BackendConfig {
-    TranslationBackend backend;
-    std::string ollamaHost;
-    int ollamaPort;
-    std::string ollamaModel;
-    std::string openAIBaseURL;
-    std::string openAIKey;
-    std::string openAIModel;
-
-    static BackendConfig snapshot() {
-        const Settings& s = Settings::shared();
-        return {s.backend, s.ollamaHost, s.ollamaPort, s.ollamaModel,
-                s.openAIBaseURL, s.openAIKey, s.openAIModel};
-    }
-};
-
 // ---------- 活跃请求管理 ----------
 
 struct ActiveRequest {
@@ -167,151 +151,41 @@ struct StreamOutcome {
     std::wstring full;
 };
 
-std::wstring providerError(const http::Result& result) {
-    if (!result.body.empty()) {
-        bool ok = false;
-        json::Value body = json::Parse(result.body, &ok);
-        if (ok) {
-            const json::Value& nested = body["error"];
-            if (nested.isObject() && nested["message"].isString())
-                return util::Widen(nested["message"].asString());
-            if (nested.isString()) return util::Widen(nested.asString());
-            if (body["message"].isString()) return util::Widen(body["message"].asString());
-        }
-    }
-    return util::Widen(result.error);
-}
-
-StreamOutcome runOllama(const TranslationRequest& req, const BackendConfig& s, uint64_t id,
-                        const DeltaFn& onDelta, const std::atomic<bool>& cancel) {
+StreamOutcome runProvider(const TranslationRequest& req, const ProviderConfig& config,
+                          const std::atomic<bool>& cancel,
+                          std::optional<std::chrono::steady_clock::time_point>& firstToken) {
     StreamOutcome out;
-
-    auto makeBody = [&](bool disableThink) {
-        json::Object options;
-        options["temperature"] = 0.3;
-        options["top_p"] = 0.9;
-        options["top_k"] = 40;
-
-        json::Object body;
-        body["model"] = s.ollamaModel;
-        body["prompt"] = PlainPrompt(req.text, req.target, req.source, req.style);
-        body["stream"] = true;
-        body["keep_alive"] = "10m";
-        // 思考型模型（qwen3 系等）默认会先生成大段隐藏推理，翻译一句要几分钟；
-        // 必须显式关闭。不支持该字段的模型会 400，调用方去掉后重试。
-        if (disableThink) body["think"] = false;
-        body["options"] = json::Value(std::move(options));
-        return json::Value(std::move(body)).dump();
-    };
-
-    std::wstring url = util::Widen(s.ollamaHost) + L":" + std::to_wstring(s.ollamaPort) + L"/api/generate";
-
+    provider::Request wire;
+    if (!provider::BuildRequest(config, req, wire, out.error)) return out;
+    provider::Response response(config.kind);
     LineAssembler lines;
     auto onLine = [&](const std::string& line) {
-            bool ok = false;
-            json::Value v = json::Parse(line, &ok);
-            if (!ok) return;
-            const std::string& delta = v["response"].asString();
-            if (!delta.empty()) {
-                std::wstring wdelta = util::Widen(delta);
-                out.full += wdelta;
-                onDelta(id, wdelta);
-            }
+        response.line(line);
+        if (!response.text.empty() && !firstToken) firstToken = std::chrono::steady_clock::now();
     };
-    auto onChunk = [&](const char* data, size_t len) {
-        lines.feed(data, len, onLine);
-    };
-
-    http::Result r = http::PostStream(url, makeBody(true), L"", onChunk, cancel);
-    if (r.status == 400 && !cancel.load()) {
-        // 模型不支持 think 字段 → 去掉重试
-        util::Log("ollama: think rejected (400), retrying without");
-        lines = LineAssembler();
-        out.full.clear();
-        r = http::PostStream(url, makeBody(false), L"", onChunk, cancel);
-    }
-    if (!r.ok) {
-        out.error = r.status == 0 && !cancel.load()
-                        ? L"Can't reach Ollama — is `ollama serve` running?"
-                        : util::Widen(r.error);
-        return out;
+    auto receive = [&](const char* data, size_t len) { lines.feed(data, len, onLine); };
+    auto result = http::PostStream(wire.url, wire.body, wire.headers, receive, cancel);
+    if (config.kind == TranslationBackend::Ollama && result.status == 400 && !cancel.load()) {
+        response = provider::Response(config.kind); lines = LineAssembler(); firstToken.reset();
+        provider::BuildRequest(config, req, wire, out.error, false);
+        result = http::PostStream(wire.url, wire.body, wire.headers, receive, cancel);
     }
     lines.finish(onLine);
-    out.ok = true;
+    if (!result.ok) out.error = util::Widen(result.error);
+    else if (!response.error.empty()) out.error = response.error;
+    else if (!response.complete) out.error = L"Connection ended before the translation was complete.";
+    else if (util::Trim(response.text).empty()) out.error = L"Empty translation.";
+    else { out.ok = true; out.full = util::Trim(response.text); }
     return out;
 }
 
-StreamOutcome runOpenAI(const TranslationRequest& req, const BackendConfig& s, uint64_t id,
-                        const DeltaFn& onDelta, const std::atomic<bool>& cancel) {
-    StreamOutcome out;
-
-    std::string base = s.openAIBaseURL;
-    while (!base.empty() && base.back() == '/') base.pop_back();
-    if (base.empty()) {
-        out.error = L"Missing cloud API base URL";
-        return out;
-    }
-    if (s.openAIModel.empty()) {
-        out.error = L"Missing cloud model name";
-        return out;
-    }
-    const bool localEndpoint = base.rfind("http://127.0.0.1", 0) == 0 ||
-                               base.rfind("http://localhost", 0) == 0 ||
-                               base.rfind("http://[::1]", 0) == 0;
-    const bool secureEndpoint = base.rfind("https://", 0) == 0;
-    if (s.openAIKey.empty() && !localEndpoint) {
-        out.error = L"Missing cloud API key";
-        return out;
-    }
-    if (!s.openAIKey.empty() && !secureEndpoint && !localEndpoint) {
-        out.error = L"Refusing to send an API key over an insecure HTTP connection";
-        return out;
-    }
-
-    json::Array messages;
-    {
-        json::Object sys;
-        sys["role"] = "system";
-        sys["content"] = SystemPrompt(req.target, req.source, req.style);
-        messages.push_back(json::Value(std::move(sys)));
-        json::Object user;
-        user["role"] = "user";
-        user["content"] = util::Narrow(req.text);
-        messages.push_back(json::Value(std::move(user)));
-    }
-    json::Object body;
-    body["model"] = s.openAIModel;
-    body["stream"] = true;
-    body["messages"] = json::Value(std::move(messages));
-
-    std::wstring headers;
-    if (!s.openAIKey.empty())
-        headers += L"Authorization: Bearer " + util::Widen(s.openAIKey) + L"\r\n";
-    if (base.find("openrouter.ai") != std::string::npos) {
-        headers += L"HTTP-Referer: https://xnu.app/TypeTide/\r\n";
-        headers += L"X-OpenRouter-Title: TypeTide\r\n";
-    }
-
-    LineAssembler lines;
-    auto onLine = [&](const std::string& line) {
-            if (auto delta = ParseOpenAISSELine(line)) {
-                out.full += *delta;
-                onDelta(id, *delta);
-            }
-    };
-    auto onChunk = [&](const char* data, size_t len) {
-        lines.feed(data, len, onLine);
-    };
-
-    http::Result r = http::PostStream(util::Widen(base) + L"/chat/completions",
-                                      json::Value(std::move(body)).dump(), headers, onChunk, cancel);
-    if (!r.ok) {
-        out.error = providerError(r);
-        return out;
-    }
-    lines.finish(onLine);
-    out.ok = true;
-    return out;
+std::string providerCacheIdentity(const std::vector<ProviderConfig>& providers) {
+    json::Array identity;
+    for (const auto& p : providers)
+        identity.emplace_back(json::Object{{"id", p.id}, {"kind", ProviderKindCode(p.kind)},
+            {"url", p.baseURL}, {"model", p.model}, {"key", p.apiKey}});
+    // Memory only; never written to diagnostics or disk.
+    return json::Value(std::move(identity)).dump();
 }
 
 } // namespace
@@ -342,20 +216,21 @@ std::string PlainPrompt(const std::wstring& text, Language target, std::optional
     return s;
 }
 
-uint64_t Stream(const TranslationRequest& req, DeltaFn onDelta, DoneFn onDone) {
+uint64_t StreamWithProviders(const TranslationRequest& req, std::vector<ProviderConfig> configs,
+                             DeltaFn onDelta, DoneFn onDone, bool useCache) {
     uint64_t id = g_nextId.fetch_add(1);
     const auto start = std::chrono::steady_clock::now();
 
     // 配置快照在调用线程（主线程）拍好带进工作线程
-    BackendConfig cfg = BackendConfig::snapshot();
+    const std::string identity = providerCacheIdentity(configs);
 
     // 缓存命中：同步回调全文
-    std::string key = cacheKey(req, cfg.backend == TranslationBackend::OpenAI ? "openai" : "ollama");
-    if (auto cached = Cache::shared().get(key)) {
+    std::string key = cacheKey(req, identity.c_str());
+    if (auto cached = useCache ? Cache::shared().get(key) : std::nullopt) {
         onDelta(id, *cached);
         onDone(id, true, L"");
         diagnostics::Record("translation", "cacheHit",
-                            cfg.backend == TranslationBackend::OpenAI ? "openai" : "ollama",
+                            "providerChain",
                             {}, {}, 0, 0, (int)req.text.size());
         return id;
     }
@@ -366,16 +241,28 @@ uint64_t Stream(const TranslationRequest& req, DeltaFn onDelta, DoneFn onDone) {
         g_active[id] = {cancel};
     }
 
-    std::thread([req, cfg, id, key, cancel, start,
+    std::thread([req, configs = std::move(configs), id, key, cancel, start, useCache,
                  onDelta = std::move(onDelta), onDone = std::move(onDone)] {
         std::optional<std::chrono::steady_clock::time_point> firstToken;
-        DeltaFn trackedDelta = [&](uint64_t requestId, const std::wstring& delta) {
-            if (!delta.empty() && !firstToken) firstToken = std::chrono::steady_clock::now();
-            onDelta(requestId, delta);
-        };
-        StreamOutcome out = cfg.backend == TranslationBackend::OpenAI
-                                ? runOpenAI(req, cfg, id, trackedDelta, *cancel)
-                                : runOllama(req, cfg, id, trackedDelta, *cancel);
+        StreamOutcome out;
+        bool primarySucceeded = false;
+        std::wstring failures;
+        const char* backend = "providerChain";
+        for (size_t index = 0; index < configs.size() && !cancel->load(); ++index) {
+            firstToken.reset();
+            const auto attemptStart = std::chrono::steady_clock::now();
+            out = runProvider(req, configs[index], *cancel, firstToken);
+            backend = ProviderKindCode(configs[index].kind);
+            primarySucceeded = index == 0 && out.ok;
+            if (out.ok || cancel->load()) break;
+            if (!failures.empty()) failures += L"\n";
+            failures += std::to_wstring(index + 1) + L". " + util::Widen(configs[index].name) + L": " + out.error;
+            const int elapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - attemptStart).count();
+            diagnostics::Record("providerAttempt", "failure", backend, {}, "provider", -1, elapsed);
+        }
+        if (!out.ok) out.error = configs.empty() ? L"Add a provider in Settings > Providers first."
+            : L"All providers failed.\n" + failures;
         bool cancelled = cancel->load();
         finishRequest(id);
         const auto end = std::chrono::steady_clock::now();
@@ -383,7 +270,6 @@ uint64_t Stream(const TranslationRequest& req, DeltaFn onDelta, DoneFn onDone) {
         const int firstMs = firstToken
             ? (int)std::chrono::duration_cast<std::chrono::milliseconds>(*firstToken - start).count()
             : -1;
-        const char* backend = cfg.backend == TranslationBackend::OpenAI ? "openai" : "ollama";
         if (cancelled) {
             diagnostics::Record("translation", "cancelled", backend, {}, "cancelled",
                                 firstMs, totalMs, (int)req.text.size());
@@ -391,7 +277,9 @@ uint64_t Stream(const TranslationRequest& req, DeltaFn onDelta, DoneFn onDone) {
         }
         const std::wstring cleaned = util::Trim(out.full);
         if (out.ok && !cleaned.empty()) {
-            Cache::shared().set(key, cleaned);
+            // A fallback result must not prevent the primary being retried next time.
+            if (useCache && primarySucceeded) Cache::shared().set(key, cleaned);
+            onDelta(id, cleaned);
             onDone(id, true, L"");
             diagnostics::Record("translation", "success", backend, {}, {},
                                 firstMs, totalMs, (int)req.text.size());
@@ -406,6 +294,10 @@ uint64_t Stream(const TranslationRequest& req, DeltaFn onDelta, DoneFn onDone) {
     }).detach();
 
     return id;
+}
+
+uint64_t Stream(const TranslationRequest& req, DeltaFn onDelta, DoneFn onDone) {
+    return StreamWithProviders(req, Settings::shared().effectiveProviders(), std::move(onDelta), std::move(onDone), true);
 }
 
 void Cancel(uint64_t reqId) {
@@ -450,7 +342,7 @@ std::optional<std::wstring> TranslateFully(const TranslationRequest& req, std::w
     return cleaned;
 }
 
-void CheckHealthAsync(std::function<void(HealthCheckResult)> completion) {
+void CheckHealthAsync(std::function<void(HealthCheckResult)> completion, std::optional<ProviderConfig> selected) {
     const auto start = std::chrono::steady_clock::now();
     const auto stamp = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -460,10 +352,11 @@ void CheckHealthAsync(std::function<void(HealthCheckResult)> completion) {
         std::optional<std::chrono::steady_clock::time_point> first;
     };
     auto state = std::make_shared<State>();
-    const std::string backend = Settings::shared().backend == TranslationBackend::OpenAI ? "openai" : "ollama";
-    Stream(
-        {L"TypeTide health check " + std::to_wstring(stamp), Language::English,
-         Language::Chinese, RewriteStyle::Faithful},
+    const std::string backend = selected ? ProviderKindCode(selected->kind) : "providerChain";
+    auto configs = selected ? std::vector<ProviderConfig>{*selected} : Settings::shared().effectiveProviders();
+    StreamWithProviders(
+        {L"TypeTide-Win health check " + std::to_wstring(stamp), Language::English,
+         Language::Chinese, RewriteStyle::Faithful}, std::move(configs),
         [state](uint64_t, const std::wstring& delta) {
             std::lock_guard lock(state->mutex);
             if (!delta.empty() && !state->first) state->first = std::chrono::steady_clock::now();
@@ -477,15 +370,15 @@ void CheckHealthAsync(std::function<void(HealthCheckResult)> completion) {
             result.ok = success && !util::Trim(state->full).empty();
             result.message = result.ok ? L"Connected and translated successfully."
                                        : (message.empty() ? L"No translation returned." : message);
-            result.firstTokenMs = state->first
-                ? (int)std::chrono::duration_cast<std::chrono::milliseconds>(*state->first - start).count()
-                : -1;
+            // UI callbacks now receive only complete results. Actual first-token
+            // timing is recorded by the provider worker, not this completion callback.
+            result.firstTokenMs = -1;
             result.totalMs = (int)std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
             diagnostics::Record("backendHealthCheck", result.ok ? "success" : "failure",
                                 backend, {}, result.ok ? "" : "backend",
                                 result.firstTokenMs, result.totalMs);
             completion(std::move(result));
-        });
+        }, false);
 }
 
 void ClearCacheForTesting() {

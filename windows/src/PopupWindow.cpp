@@ -4,24 +4,17 @@
 #include "Hooks.h"
 #include "Util.h"
 #include "UITheme.h"
+#include "Settings.h"
 #include <dwmapi.h>
 #include <windowsx.h>
 #include <algorithm>
-#include <cmath>
+
 
 namespace {
 
-constexpr wchar_t kClassName[] = L"TypeTidePopup";
+constexpr wchar_t kClassName[] = L"TypeTide-WinPopup";
 constexpr UINT_PTR kCopiedTimer = 1;
-constexpr UINT_PTR kTideTimer = 2;
-
-bool systemPrefersDark() {
-    DWORD v = 1, size = sizeof(v);
-    RegGetValueW(HKEY_CURRENT_USER,
-                 L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                 L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &size);
-    return v == 0;
-}
+constexpr UINT_PTR kLoadingTimer = 2;
 
 } // namespace
 
@@ -46,11 +39,11 @@ void PopupWindow::show(const std::wstring& original, Language target, RECT ancho
 
     original_ = original;
     translation_.clear();
+    pendingTranslation_.clear();
     error_.clear();
     loading_ = true;
     copiedFlash_ = false;
-    tidePhase_ = TidePhase::Waiting;
-    tideTick_ = settleTicks_ = 0;
+    loadingTick_ = 0;
     BOOL clientAnimations = TRUE;
     SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &clientAnimations, 0);
     animationsEnabled_ = clientAnimations == TRUE;
@@ -59,7 +52,7 @@ void PopupWindow::show(const std::wstring& original, Language target, RECT ancho
     anchor_ = anchor;
     showReplace_ = showReplace;
     hover_ = Region::None;
-    dark_ = systemPrefersDark();
+    dark_ = Settings::shared().useDarkMode();
     highContrast_ = ui::highContrastEnabled();
 
     static bool registered = [] {
@@ -74,7 +67,7 @@ void PopupWindow::show(const std::wstring& original, Language target, RECT ancho
     (void)registered;
 
     hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                            kClassName, L"TypeTide", WS_POPUP,
+                            kClassName, L"TypeTide-Win", WS_POPUP,
                             0, 0, 10, 10, nullptr, nullptr, GetModuleHandleW(nullptr), this);
     util::Log("popup show hwnd=%p", (void*)hwnd_);
     if (!hwnd_) return;
@@ -83,61 +76,64 @@ void PopupWindow::show(const std::wstring& original, Language target, RECT ancho
     updateFonts();
 
     // Win11 圆角
+    BOOL disableTransitions = TRUE;
+    DwmSetWindowAttribute(hwnd_, DWMWA_TRANSITIONS_FORCEDISABLED, &disableTransitions, sizeof(disableTransitions));
     DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
     DwmSetWindowAttribute(hwnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
-    BOOL darkAttr = dark_;
+    BOOL darkAttr = dark_ && !highContrast_;
     DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkAttr, sizeof(darkAttr));
 
     placedAbove_ = false;
     layoutAndResize();
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-    // Match macOS: full motion gets the particle tide; reduced-motion mode
-    // still gets a low-motion activity indicator instead of static text.
-    SetTimer(hwnd_, kTideTimer, animationsEnabled_ ? 33 : 160, nullptr);
+    if (animationsEnabled_) SetTimer(hwnd_, kLoadingTimer, 40, nullptr);
     installDismissMonitors();
 }
 
 void PopupWindow::close() {
     if (!hwnd_) return;
-    KillTimer(hwnd_, kTideTimer);
+    KillTimer(hwnd_, kLoadingTimer);
+    KillTimer(hwnd_, kCopiedTimer);
     removeDismissMonitors();
     HWND h = hwnd_;
     hwnd_ = nullptr;
     DestroyWindow(h);
+    trackingMouse_ = false;
     if (onClosed) onClosed();
 }
 
 void PopupWindow::appendDelta(const std::wstring& delta) {
-    if (!hwnd_) return;
-    translation_ += delta;
-    loading_ = false;
-    tidePhase_ = TidePhase::Flowing;
-    layoutAndResize();
-    InvalidateRect(hwnd_, nullptr, TRUE);
+    // No layout/paint work per token: expose only a successfully completed result.
+    if (hwnd_ && loading_) pendingTranslation_ += delta;
 }
 
 void PopupWindow::finishTranslation() {
-    if (!hwnd_ || translation_.empty()) return;
-    loading_ = false;
-    if (animationsEnabled_) {
-        tidePhase_ = TidePhase::Settling;
-        settleTicks_ = 0;
-        SetTimer(hwnd_, kTideTimer, 33, nullptr);
-    } else {
-        tidePhase_ = TidePhase::Complete;
-        KillTimer(hwnd_, kTideTimer);
+    if (!hwnd_ || !loading_) return;
+    std::wstring complete = util::Trim(pendingTranslation_);
+    if (complete.empty()) {
+        setError(L"No translation returned");
+        return;
     }
+    translation_ = std::move(complete);
+    pendingTranslation_.clear();
+    loading_ = false;
+    KillTimer(hwnd_, kLoadingTimer);
+    layoutAndResize();
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void PopupWindow::setError(const std::wstring& error) {
     if (!hwnd_) return;
-    error_ = error;
+    error_ = error.empty() ? L"Translation failed. Please try again." : error;
     loading_ = false;
-    tidePhase_ = TidePhase::Failed;
-    KillTimer(hwnd_, kTideTimer);
+    pendingTranslation_.clear();
+    translation_.clear();
+    copiedFlash_ = false;
+    scrollY_ = 0;
+    KillTimer(hwnd_, kLoadingTimer);
+    KillTimer(hwnd_, kCopiedTimer);
     layoutAndResize();
-    InvalidateRect(hwnd_, nullptr, TRUE);
+    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void PopupWindow::setTarget(Language target) {
@@ -148,13 +144,20 @@ void PopupWindow::setTarget(Language target) {
 void PopupWindow::resetForRetranslate() {
     if (!hwnd_) return;
     translation_.clear();
+    pendingTranslation_.clear();
     error_.clear();
     loading_ = true;
-    tidePhase_ = TidePhase::Waiting;
-    tideTick_ = settleTicks_ = 0;
-    SetTimer(hwnd_, kTideTimer, animationsEnabled_ ? 33 : 160, nullptr);
+    loadingTick_ = 0;
+    scrollY_ = 0;
+    copiedFlash_ = false;
+    KillTimer(hwnd_, kCopiedTimer);
+    if (animationsEnabled_) SetTimer(hwnd_, kLoadingTimer, 40, nullptr);
     layoutAndResize();
     InvalidateRect(hwnd_, nullptr, TRUE);
+}
+
+void PopupWindow::refreshTheme() {
+    if (hwnd_) SendMessageW(hwnd_, WM_SETTINGCHANGE, 0, 0);
 }
 
 void PopupWindow::updateFonts() {
@@ -167,7 +170,7 @@ void PopupWindow::updateFonts() {
                            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
     };
     fontHeader_ = make(9, FW_SEMIBOLD);
-    fontBody_ = make(11, FW_NORMAL);
+    fontBody_ = make(12, FW_NORMAL);
     fontSmall_ = make(9, FW_NORMAL);
 }
 
@@ -180,29 +183,27 @@ void PopupWindow::layoutAndResize() {
     MONITORINFO sizeInfo{sizeof(sizeInfo)};
     GetMonitorInfoW(sizeMon, &sizeInfo);
     const int workWidth = sizeInfo.rcWork.right - sizeInfo.rcWork.left;
-    width_ = std::clamp(workWidth / 3, px(ui::control::PopupMinWidth),
-                        px(ui::control::PopupMaxWidth));
+    width_ = loading_ ? px(ui::control::PopupIdealWidth) :
+        std::clamp(workWidth / 3, px(ui::control::PopupMinWidth), px(ui::control::PopupMaxWidth));
+    width_ = std::min(width_, workWidth - px(16));
     const int width = width_;
-    const int headerH = px(36);
-    const int padX = px(ui::spacing::Large);
-    const int padY = px(ui::spacing::Medium);
+    const int headerH = px(54);
+    const int padX = px(20);
+    const int padY = px(20);
     const int contentW = width - padX * 2;
 
     // 正文高度
     HDC dc = GetDC(hwnd_);
     HFONT old = (HFONT)SelectObject(dc, fontBody_);
-    std::wstring bodyText = !error_.empty() ? error_
-                          : (translation_.empty() && loading_) ? original_
-                          : translation_;
+    const std::wstring& bodyText = !error_.empty() ? error_ : translation_;
     RECT rc{0, 0, contentW, 0};
-    DrawTextW(dc, bodyText.c_str(), -1, &rc, DT_WORDBREAK | DT_CALCRECT);
+    DrawTextW(dc, bodyText.c_str(), -1, &rc, DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX | DT_EDITCONTROL);
     SelectObject(dc, old);
     ReleaseDC(hwnd_, dc);
-    textHeight_ = rc.bottom > px(20) ? rc.bottom : px(20);
+    textHeight_ = loading_ ? px(56) : std::max((int)rc.bottom, px(76));
     int textH = textHeight_;
 
-    // 高度钳制：正文最多占所在显示器工作区的 60%，超出部分画省略号
-    // （Copy 复制的仍是完整译文）
+    // Clamp long results to the working area; overflow remains scrollable.
     {
         HMONITOR monClamp = MonitorFromRect(&anchor_, MONITOR_DEFAULTTONEAREST);
         MONITORINFO miClamp{sizeof(miClamp)};
@@ -215,16 +216,16 @@ void PopupWindow::layoutAndResize() {
 
     bool hasButtons = (!translation_.empty() && error_.empty()) ||
                       (!error_.empty() && static_cast<bool>(onRetry));
-    const int btnH = px(32);
-    const int btnGap = px(ui::spacing::Medium);
+    const int btnH = px(34);
+    const int btnGap = px(20);
 
     int height = headerH + 1 + padY + textH + (hasButtons ? btnGap + btnH : 0) + padY;
 
     // 命中区域
-    const int chipH = px(20);
+    const int chipH = px(28);
     rcClose_ = {width - padX - px(32), (headerH - px(32)) / 2,
                 width - padX, (headerH + px(32)) / 2};
-    int langW = px(86);
+    int langW = px(94);
     rcLang_ = {rcClose_.left - px(10) - langW, (headerH - chipH) / 2, rcClose_.left - px(10), (headerH + chipH) / 2};
 
     int btnY = height - padY - btnH;
@@ -284,21 +285,21 @@ void PopupWindow::paint(HDC dc) {
     DeleteObject(border);
 
     SetBkMode(dc, TRANSPARENT);
-    const int headerH = px(36);
-    const int padX = px(ui::spacing::Large);
-    const int padY = px(ui::spacing::Medium);
+    const int headerH = px(54);
+    const int padX = px(20);
+    const int padY = px(20);
 
     // ---- 头部 ----
     SelectObject(dc, fontHeader_);
-    RECT rcMark{padX, px(8), padX + px(18), px(26)};
-    brand::DrawMark(dc, rcMark, ui::Accent);
+    RECT rcMark{padX, px(10), padX + px(32), px(42)};
+    brand::DrawMark(dc, rcMark, th.text, !highContrast_);
     SetTextColor(dc, th.secondary);
-    RECT rcBrand{rcMark.right + px(4), 0, client.right, headerH};
-    DrawTextW(dc, L"TypeTide", -1, &rcBrand, DT_SINGLELINE | DT_VCENTER);
+    RECT rcBrand{rcMark.right + px(7), 0, rcLang_.left - px(6), headerH};
+    DrawTextW(dc, L"TypeTide-Win", -1, &rcBrand, DT_SINGLELINE | DT_VCENTER);
 
     // 目标语言 chip
     {
-        HBRUSH chipBg = CreateSolidBrush(hover_ == Region::Lang ? th.button : th.surface);
+        HBRUSH chipBg = CreateSolidBrush(hover_ == Region::Lang ? th.button : th.background);
         HPEN chipPen = CreatePen(PS_SOLID, 1, hover_ == Region::Lang ? th.buttonBorder : th.surface);
         HGDIOBJ oldBrush = SelectObject(dc, chipBg);
         HGDIOBJ oldPen = SelectObject(dc, chipPen);
@@ -309,7 +310,7 @@ void PopupWindow::paint(HDC dc) {
         DeleteObject(chipBg);
         SelectObject(dc, fontSmall_);
         SetTextColor(dc, th.secondary);
-        std::wstring label = L"🌐 " + lang::ShortName(target_) + L" ▾";
+        std::wstring label = lang::ShortName(target_) + L"  ▾";
         DrawTextW(dc, label.c_str(), -1, (RECT*)&rcLang_,
                   DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
     }
@@ -320,7 +321,7 @@ void PopupWindow::paint(HDC dc) {
     DrawTextW(dc, L"✕", -1, (RECT*)&rcClose_, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
 
     // 分隔线
-    RECT divider{0, headerH, client.right, headerH + 1};
+    RECT divider{padX, headerH, client.right - padX, headerH + 1};
     HBRUSH divBrush = CreateSolidBrush(th.divider);
     FillRect(dc, &divider, divBrush);
     DeleteObject(divBrush);
@@ -335,77 +336,38 @@ void PopupWindow::paint(HDC dc) {
                 headerH + 1 + padY - scrollY_ + textHeight_};
     if (!error_.empty()) {
         SetTextColor(dc, th.warning);
-        std::wstring msg = L"⚠ " + error_;
+        std::wstring msg = error_;
         DrawTextW(dc, msg.c_str(), -1, &rcText, DT_WORDBREAK | DT_NOPREFIX);
-    } else if (translation_.empty() && loading_) {
-        SetTextColor(dc, th.secondary);
-        DrawTextW(dc, original_.c_str(), -1, &rcText,
-                  DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
-    } else {
+    } else if (!loading_) {
         SetTextColor(dc, th.text);
         DrawTextW(dc, translation_.c_str(), -1, &rcText,
                   DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
     }
     RestoreDC(dc, saved);
 
-    // 点阵潮汐：等待/流式输出时循环，完成时快速扫过一次后停下。
-    const bool activityActive = tidePhase_ == TidePhase::Waiting ||
-        tidePhase_ == TidePhase::Flowing || tidePhase_ == TidePhase::Settling;
-    const bool tideActive = animationsEnabled_ && activityActive;
-    if (tideActive && clipText.right > clipText.left) {
-        saved = SaveDC(dc);
-        IntersectClipRect(dc, clipText.left, clipText.top, clipText.right, clipText.bottom);
-        const int span = std::max(1, static_cast<int>(clipText.right - clipText.left) + px(90));
-        const unsigned speed = tidePhase_ == TidePhase::Settling ? 11u : 4u;
-        const int frontier = clipText.left - px(22) + (int)((tideTick_ * speed) % (unsigned)span);
-        HPEN oldPen = (HPEN)SelectObject(dc, GetStockObject(NULL_PEN));
-        for (int i = 0; i < 32; ++i) {
-            const int row = i % 7;
-            const int trail = i / 7;
-            const int x = frontier - px(trail * 13) - px((row % 2) * 4);
-            const double wave = std::sin((double)tideTick_ * 0.14 + i * 0.72) * px(5);
-            const int y = clipText.top + row * std::max(1, static_cast<int>(clipText.bottom - clipText.top - px(5)) / 6)
-                          + (int)wave;
-            const int radius = px(1 + ((i * 7) % 3));
-            COLORREF color = highContrast_ ? th.text : (i % 3 == 0)
-                ? (dark_ ? RGB(0x39, 0xD9, 0xE8) : RGB(0x00, 0x9E, 0xC4))
-                : (dark_ ? RGB(0x98, 0x83, 0xFF) : RGB(0x6B, 0x4B, 0xE8));
-            HBRUSH dot = CreateSolidBrush(color);
-            HBRUSH old = (HBRUSH)SelectObject(dc, dot);
-            Ellipse(dc, x - radius, y - radius, x + radius + 1, y + radius + 1);
-            SelectObject(dc, old);
-            DeleteObject(dot);
+    if (loading_) {
+        // One restrained loading ring. Reduced motion keeps a static status ring.
+        const float diameter = (float)px(28);
+        const float left = (float)padX;
+        const float top = (float)(headerH + padY + px(10));
+        if (vectoricons::Initialize()) {
+            Gdiplus::Graphics graphics(dc);
+            graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            Gdiplus::Pen track(vectoricons::Color(th.divider), (float)px(3));
+            Gdiplus::Pen ring(vectoricons::Color(highContrast_ ? th.text : ui::accent(dark_)), (float)px(3));
+            ring.SetStartCap(Gdiplus::LineCapRound);
+            ring.SetEndCap(Gdiplus::LineCapRound);
+            graphics.DrawEllipse(&track, left, top, diameter, diameter);
+            graphics.DrawArc(&ring, left, top, diameter, diameter, (float)((loadingTick_ * 12) % 360) - 90.f, 95.f);
         }
-        SelectObject(dc, oldPen);
-        RestoreDC(dc, saved);
-    } else if (!animationsEnabled_ && activityActive) {
-        // Reduced-motion fallback. Windows can disable client-area animation
-        // for accessibility, remote sessions, or the global Animation effects
-        // switch. Keep the content stable, but show a gently stepping three-dot
-        // activity indicator like macOS's reduced-motion ProgressView.
+        SelectObject(dc, fontHeader_);
+        SetTextColor(dc, th.text);
+        RECT title{padX + px(46), headerH + padY + px(2), client.right - padX, headerH + padY + px(24)};
+        DrawTextW(dc, L"Translating…", -1, &title, DT_SINGLELINE | DT_VCENTER);
         SelectObject(dc, fontSmall_);
         SetTextColor(dc, th.secondary);
-        RECT progress{clipText.left, clipText.bottom - px(18), clipText.right, clipText.bottom};
-        if (translation_.empty()) {
-            progress.right -= px(34);
-            DrawTextW(dc, L"Translating", -1, &progress,
-                      DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-        }
-        const int activeDot = static_cast<int>((tideTick_ / 2) % 3);
-        const int dotY = progress.top + (progress.bottom - progress.top) / 2;
-        const int firstX = clipText.right - px(25);
-        HPEN oldPen = (HPEN)SelectObject(dc, GetStockObject(NULL_PEN));
-        for (int i = 0; i < 3; ++i) {
-            const COLORREF color = i == activeDot ? ui::Accent : th.buttonBorder;
-            HBRUSH dot = CreateSolidBrush(color);
-            HBRUSH old = (HBRUSH)SelectObject(dc, dot);
-            const int radius = px(i == activeDot ? 3 : 2);
-            const int x = firstX + px(i * 9);
-            Ellipse(dc, x - radius, dotY - radius, x + radius + 1, dotY + radius + 1);
-            SelectObject(dc, old);
-            DeleteObject(dot);
-        }
-        SelectObject(dc, oldPen);
+        RECT hint{title.left, title.bottom + px(3), title.right, title.bottom + px(24)};
+        DrawTextW(dc, L"Preparing your translation · Esc to cancel", -1, &hint, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
     }
     if (textHeight_ > viewportHeight_) {
         const int trackTop = headerH + 1 + padY;
@@ -439,10 +401,10 @@ void PopupWindow::paint(HDC dc) {
         DeleteObject(pen);
         DeleteObject(b);
         SelectObject(dc, fontSmall_);
-        SetTextColor(dc, prominent ? ui::AccentText : th.text);
+        SetTextColor(dc, prominent ? (highContrast_ ? GetSysColor(COLOR_HIGHLIGHTTEXT) : ui::AccentText) : th.text);
         DrawTextW(dc, label, -1, (RECT*)&r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
     };
-    if (!translation_.empty() && error_.empty()) {
+    if (!loading_ && !translation_.empty() && error_.empty()) {
         drawButton(rcCopy_, copiedFlash_ ? L"Copied ✓" : L"Copy", false, hover_ == Region::Copy);
         if (showReplace_) drawButton(rcReplace_, L"Replace", true, hover_ == Region::Replace);
     }
@@ -585,13 +547,11 @@ LRESULT PopupWindow::handle(UINT msg, WPARAM wp, LPARAM lp) {
             KillTimer(hwnd_, kCopiedTimer);
             copiedFlash_ = false;
             if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
-        } else if (wp == kTideTimer) {
-            ++tideTick_;
-            if (tidePhase_ == TidePhase::Settling && ++settleTicks_ >= 15) {
-                tidePhase_ = TidePhase::Complete;
-                KillTimer(hwnd_, kTideTimer);
-            }
-            if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+        } else if (wp == kLoadingTimer && loading_) {
+            ++loadingTick_;
+            RECT ring{MulDiv(18, dpi_, 96), MulDiv(82, dpi_, 96),
+                      MulDiv(52, dpi_, 96), MulDiv(116, dpi_, 96)};
+            InvalidateRect(hwnd_, &ring, FALSE);
         }
         return 0;
     case WM_MOUSEWHEEL:
@@ -615,6 +575,19 @@ LRESULT PopupWindow::handle(UINT msg, WPARAM wp, LPARAM lp) {
         return (LRESULT)translation_.size();
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
+    case WM_SETTINGCHANGE: {
+        dark_ = Settings::shared().useDarkMode();
+        highContrast_ = ui::highContrastEnabled();
+        BOOL animate = TRUE;
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animate, 0);
+        animationsEnabled_ = animate != FALSE;
+        KillTimer(hwnd_, kLoadingTimer);
+        if (loading_ && animationsEnabled_) SetTimer(hwnd_, kLoadingTimer, 40, nullptr);
+        BOOL dark = dark_ && !highContrast_;
+        DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return 0;
+    }
     case WM_DPICHANGED:
         dpi_ = HIWORD(wp);
         updateFonts();

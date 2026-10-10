@@ -1,5 +1,5 @@
 //
-//  Clipboard.h — 文本剪贴板读写与快照/还原（对应 macOS 的 Pasteboard）。
+//  Clipboard.h — 文本剪贴板读写与快照/还原。
 //
 #pragma once
 #include <windows.h>
@@ -17,7 +17,7 @@ bool SetText(const std::wstring& text);
 /// 剪贴板序列号（变化说明有新内容写入）
 DWORD SequenceNumber();
 
-/// 文本快照。非文本内容不保存（还原时清空），与 macOS 侧行为一致：
+/// 文本快照。非文本内容不保存（还原时清空）：
 /// 我们只承诺还原文本。
 struct Snapshot {
     std::optional<std::wstring> text;

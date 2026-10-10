@@ -1,6 +1,6 @@
 //
-//  PopupWindow.h — 翻译弹窗（对应 macOS 的 PopupController + TranslationPopupView）。
-//  无激活置顶窗口：流式展示译文，Copy / Replace / 改目标语言 / Esc / 点外部关闭。
+//  PopupWindow.h — 翻译弹窗。
+//  无激活置顶窗口：加载期间缓冲译文，完成后一次显示。
 //
 #pragma once
 #include <windows.h>
@@ -17,7 +17,7 @@ public:
     void show(const std::wstring& original, Language target, RECT anchor, bool showReplace);
 
     void appendDelta(const std::wstring& delta);
-    /// 流结束：完成最后一次潮汐扫过；空结果由 App 转成错误。
+    /// 流结束：停止加载动画，展开并一次显示完整译文。
     void finishTranslation();
     void setError(const std::wstring& error);
     void setTarget(Language target);
@@ -25,6 +25,7 @@ public:
     void resetForRetranslate();
 
     void close();
+    void refreshTheme();
     bool isVisible() const { return hwnd_ != nullptr; }
     const std::wstring& translation() const { return translation_; }
     Language target() const { return target_; }
@@ -63,15 +64,13 @@ private:
 
     std::wstring original_;
     std::wstring translation_;
+    std::wstring pendingTranslation_;
     std::wstring error_;
     bool loading_ = true;
     Language target_ = Language::English;
     bool copiedFlash_ = false;
-    enum class TidePhase { Waiting, Flowing, Settling, Complete, Failed };
-    TidePhase tidePhase_ = TidePhase::Waiting;
     bool animationsEnabled_ = true;
-    unsigned tideTick_ = 0;
-    unsigned settleTicks_ = 0;
+    unsigned loadingTick_ = 0;
     int width_ = 420;
     int textHeight_ = 0;
     int viewportHeight_ = 0;

@@ -1,6 +1,6 @@
 //
-//  Settings.h — 全局设置（对应 macOS 的 AppSettings），
-//  JSON 持久化到 %APPDATA%\TypeTide\settings.json。
+//  Settings.h — 全局设置，
+//  JSON 持久化到 %APPDATA%\TypeTide-Win\settings.json。
 //
 #pragma once
 #include <windows.h>
@@ -8,7 +8,18 @@
 #include <string>
 #include <vector>
 
-enum class TranslationBackend { Ollama, OpenAI };
+enum class TranslationBackend { Ollama, OpenAI, Anthropic, Gemini };
+struct ProviderConfig {
+    std::string id;
+    std::string name = "Ollama";
+    TranslationBackend kind = TranslationBackend::Ollama;
+    std::string baseURL = "http://127.0.0.1:11434";
+    std::string model = "qwen2.5:3b";
+    std::string apiKey;
+};
+const char* ProviderKindCode(TranslationBackend kind);
+ProviderConfig NewProvider(TranslationBackend kind);
+enum class Appearance { System, Light, Dark };
 
 /// 划词触发方式
 enum class SelectionTrigger {
@@ -38,6 +49,8 @@ struct Hotkey {
 
 struct Settings {
     bool enabled = true;
+    Appearance appearance = Appearance::System;
+    bool useDarkMode() const;
     TranslationBackend backend = TranslationBackend::Ollama;
 
     // Ollama
@@ -49,6 +62,12 @@ struct Settings {
     std::string openAIBaseURL = "https://api.openai.com/v1";
     std::string openAIKey;
     std::string openAIModel = "gpt-5-mini";
+
+    // Legacy fields above are read only for migration/old settings compatibility.
+    std::vector<ProviderConfig> providers;
+    bool providersConfigured = false;
+    std::vector<ProviderConfig> effectiveProviders() const;
+    void ensureProviders();
 
     // 语言（native = 母语，foreign = 外语）
     Language nativeLanguage = Language::Chinese;

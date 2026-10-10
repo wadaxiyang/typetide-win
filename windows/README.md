@@ -1,48 +1,32 @@
-# TypeTide for Windows
+# TypeTide-Win — Windows development
 
-Native Win32 C++20 port of TypeTide — system-wide AI translation & inline
-rewrite. Zero third-party dependencies: WinHTTP for networking, UI Automation
-for selection capture, a tiny built-in JSON parser. No Electron, no runtime.
+Native Win32 C++20 system-wide AI translation and inline rewrite. Uses WinHTTP,
+UI Automation and a built-in JSON parser, with no third-party runtime dependencies.
 
-## Feature parity with macOS
+- Project: [wadaxiyang/typetide-win](https://github.com/wadaxiyang/typetide-win)
+- Upstream reference: [everettjf/typetide](https://github.com/everettjf/typetide)
 
-| | macOS | Windows |
-|---|---|---|
-| Read · translate selection | ⌥D → popup | Alt+D → popup |
-| Write · rewrite in place | ⌥R | Alt+R |
-| Selection capture | AX API → clipboard fallback | UI Automation TextPattern → clipboard fallback |
-| Undo-safe replace | synthetic ⌘V | synthetic Ctrl+V |
-| Backends | Ollama · OpenAI-compatible (streaming) | same |
-| Ollama model picker / auto-resolve | ✅ | ✅ (dropdown from /api/tags; invalid model auto-replaced at startup) |
-| Floating icon / auto-translate on select | ✅ | ✅ (low-level mouse hook) |
-| Retarget language in popup | ✅ | ✅ |
-| Styles (Faithful/Formal/Casual/Polished) | ✅ | ✅ |
-| Menu bar / tray | menu bar | system tray |
-| Launch at login | SMAppService | HKCU Run key |
-| Per-app skip list | ✅ | ✅ (exe name) |
-| Update check | GitHub Releases | same |
-| Settings | SwiftUI window | native tabbed window |
-| Shortcut actions / verification | ✅ | ✅ |
-| First-run backend check | ✅ | ✅ |
-| Local privacy-safe diagnostics | ✅ | ✅ |
-| System light/dark settings UI | ✅ | ✅ |
-| Permissions needed | Accessibility | none |
+## Features and configuration
 
-Settings persist to `%APPDATA%\TypeTide\settings.json`
+Translate selected text with Alt+D, rewrite in place with Alt+R, or enable the
+floating selection icon and automatic translation. Results are collected behind a loading indicator, then shown in a native
+popup with Copy, Replace, and target-language controls. The app includes a system
+tray menu, launch at login, per-app exclusions, light/dark mode, and local diagnostics.
+
+Settings persist to `%APPDATA%\TypeTide-Win\settings.json`
 (override dir with the `TYPETIDE_DATA_DIR` env var; set `TYPETIDE_DEBUG=1` to
 write `debug.log` beside it).
 
-Cloud API presets are available for OpenAI, OpenRouter, and DeepSeek, alongside
-any custom OpenAI-compatible `/chat/completions` endpoint. In normal use the API
-key is stored in Windows Credential Manager; it is never written back to
-`settings.json`. Ollama models are preloaded at startup and kept warm for 10
-minutes to avoid cold-start delays.
+Add named providers with OpenAI-compatible, Anthropic, Gemini or Ollama format.
+Order them with Move up/down; a failed attempt falls back to the next entry.
+API keys are stored separately in Windows Credential Manager, outside settings.json.
+A primary Ollama model is preloaded and kept warm for 10 minutes.
 
 The shortcut editor supports Ctrl, Shift, Alt, and the Windows key. Each of the
 two shortcuts independently chooses smart/native/foreign direction and popup or
 in-place replacement. Either shortcut can be cleared; keep at least one configured
-for keyboard triggering. The Ollama picker also recommends an installed model size
-from the machine's physical memory; it never downloads or changes models by itself.
+for keyboard triggering. Configure an installed Ollama model explicitly; managed
+provider entries are never silently changed by model discovery.
 
 ## Build
 
@@ -53,21 +37,26 @@ all bundled with the "Desktop development with C++" workload).
 # from a VS Developer PowerShell / Command Prompt
 cd windows
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build          # → build\TypeTide.exe
+cmake --build build          # → build\TypeTide-Win.exe
 ```
 
-The tray icon (`assets/app.ico`) is generated from the macOS icon set with
-`scripts\make-icon.ps1`.
+The transparent icon is authored in `assets/brand.svg`; navigation symbols live in
+`assets/navigation.svg`. Regenerate the checked-in GDI+ geometry with
+`python ../scripts/generate-brand-assets.py` and export the ICO using
+`scripts\make-icon.ps1`. These are development tools; the executable only uses Windows APIs.
+
+From a regular PowerShell at the repository root, `./windows/scripts/build.ps1`
+automatically locates the installed Visual Studio C++ toolchain.
 
 ## Test
 
 ```powershell
-# unit-style self-tests (JSON, language detection, settings, shared contracts,
+# unit-style self-tests (JSON, language detection, settings, translation contracts,
 # privacy-safe diagnostics, prompts)
-build\TypeTide.exe --selftest
+build\TypeTide-Win.exe --selftest
 
 # + a real streaming translation through the configured backend
-build\TypeTide.exe --selftest-translate
+build\TypeTide-Win.exe --selftest-translate
 ```
 
 End-to-end (drives the real app + a mock backend + a scratch editor window;
@@ -94,14 +83,15 @@ main.cpp             single instance, COM init, message loop
 App                  orchestrator: hotkeys, flows, thread marshaling (WM_APP_*)
 SelectionCapture     UIA TextPattern selection (+ rect) → synthetic Ctrl+C fallback
 TextReplacer         clipboard paste replace (undo-safe), clipboard restored
-Translator           prompts · Ollama NDJSON · OpenAI SSE · LRU cache (worker threads)
-OllamaModels         /api/tags model list · auto-resolve · async preload/keep-alive
+Translator           prompts · ordered provider fallback · LRU cache (worker threads)
+ProviderProtocol     Ollama / OpenAI / Anthropic / Gemini request and stream formats
+OllamaModels         legacy model discovery · async primary preload/keep-alive
 Http                 WinHTTP streaming POST / GET
-PopupWindow          no-activate topmost popup: streaming text, Copy/Replace,
+PopupWindow          no-activate topmost popup: loading then complete text, Copy/Replace,
                      retarget menu, Esc / click-outside dismiss, dark mode, DPI
 SelectionIcon        floating icon next to selection
 SelectionMonitor     WH_MOUSE_LL mouse-up → UIA selection (icon / auto trigger)
-SettingsWindow       tabbed native settings (instant apply)
+SettingsWindow       six-page sidebar · ordered provider list with Save/Cancel editor
 TrayIcon / Hotkeys / LaunchAtLogin / UpdateChecker / Settings / Json / Language
 ```
 
@@ -117,7 +107,7 @@ Reliability notes:
   know when the target actually consumed the paste before restoring the
   original clipboard.
 - `settings.json` writes are atomic (temp file + rename).
-- Unhandled exceptions write a minidump to `%APPDATA%\TypeTide\crashes\`
+- Unhandled exceptions write a minidump to `%APPDATA%\TypeTide-Win\crashes\`
   (the 5 most recent are kept) — attach one when reporting a crash.
 - The tray icon re-registers itself after an explorer.exe restart.
 - Selections over 5000 characters are rejected with a friendly message.
@@ -131,5 +121,30 @@ otherwise a 2-second translation silently burns minutes on hidden reasoning.
 - Some apps (many Electron apps, some WinForms controls) don't expose UIA
   TextPattern — capture falls back to an invisible copy and the popup anchors
   at the cursor instead of the selection.
-- `RegisterHotKey` fails if another app owns the combo; TypeTide warns once and
+- `RegisterHotKey` fails if another app owns the combo; TypeTide-Win warns once and
   you can pick a different shortcut in Settings → Shortcuts.
+
+## UI regression checks
+
+CMake builds `TypeTide-UiTests.exe` when `BUILD_TESTING` is enabled. Run
+`ctest --test-dir build --output-on-failure` to verify loading/completion behavior,
+partial-response isolation, retry, empty/error output, long text, and dismissal.
+For a manual loading-to-result preview, run `build\TypeTide-UiTests.exe --preview`.
+Choose General → Appearance in the app to compare System / Light / Dark without
+changing Windows settings.
+
+
+## Provider configuration
+
+Settings → Providers contains an ordered, persisted list. Add/edit uses Save and
+Cancel; Move up/down changes priority immediately. Supported wire formats are
+Ollama generate, OpenAI chat completions, Anthropic Messages, and Gemini native
+Generate Content. Each provider has its own name, base URL, model, and credential
+entry. Existing single-backend settings are migrated lazily.
+
+`ProviderProtocol.*` owns request construction, endpoint validation and stream
+completion parsing; `Translator.*` snapshots the list before starting its worker,
+buffers each attempt and emits only the winning complete result. Incomplete,
+empty or failed responses advance to the next entry. Cancellation does not.
+Fallback results are not cached so the primary can recover on the next request.
+Use `ctest --test-dir windows/build --output-on-failure` for offline regressions.

@@ -36,7 +36,7 @@ void TrayIcon::add(HWND owner, UINT callbackMessage) {
                                    IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                                    GetSystemMetrics(SM_CYSMICON), 0);
     if (!nid_.hIcon) nid_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(nid_.szTip, L"TypeTide");
+    wcscpy_s(nid_.szTip, L"TypeTide-Win");
     added_ = Shell_NotifyIconW(NIM_ADD, &nid_);
     nid_.uVersion = NOTIFYICON_VERSION_4;
     Shell_NotifyIconW(NIM_SETVERSION, &nid_);
@@ -59,7 +59,7 @@ void TrayIcon::showMenu(HWND owner) {
     }
 
     AppendMenuW(menu, MF_STRING | (s.enabled ? MF_CHECKED : 0), kMenuToggle,
-                s.enabled ? L"TypeTide is On" : L"TypeTide is Off");
+                s.enabled ? L"TypeTide-Win is On" : L"TypeTide-Win is Off");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     std::wstring readHint = std::wstring(actionName(s.readShortcutAction)) + L":  " + s.readShortcut.displayString();
@@ -69,7 +69,7 @@ void TrayIcon::showMenu(HWND owner) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"Settings…");
-    AppendMenuW(menu, MF_STRING, kMenuQuit, L"Quit TypeTide");
+    AppendMenuW(menu, MF_STRING, kMenuQuit, L"Quit TypeTide-Win");
 
     POINT pt{};
     GetCursorPos(&pt);

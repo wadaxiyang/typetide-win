@@ -47,7 +47,7 @@ bool App::init(HINSTANCE inst) {
     RegisterClassW(&wc);
 
     // 隐藏主窗口（顶层不可见；托盘与热键的宿主）
-    hwnd_ = CreateWindowExW(0, kAppWindowClass, L"TypeTide", 0, 0, 0, 0, 0,
+    hwnd_ = CreateWindowExW(0, kAppWindowClass, L"TypeTide-Win", 0, 0, 0, 0, 0,
                             nullptr, nullptr, inst, nullptr);
     if (!hwnd_) return false;
 
@@ -100,7 +100,7 @@ void App::applyEnabledState() {
             hotkeyWarningShown_ = true;
             MessageBoxW(nullptr,
                         L"Translate and rewrite must use different shortcuts. Choose a different combination in Settings → Shortcuts.",
-                        L"TypeTide — duplicate shortcuts", MB_OK | MB_ICONWARNING);
+                        L"TypeTide-Win — duplicate shortcuts", MB_OK | MB_ICONWARNING);
         }
         return;
     }
@@ -128,7 +128,7 @@ void App::applyEnabledState() {
         std::wstring message = L"These shortcuts could not be registered:\n\n" + unavailable +
                                L"\n\nChoose different shortcuts in Settings → Shortcuts.";
         MessageBoxW(nullptr, message.c_str(),
-                    L"TypeTide — shortcut unavailable", MB_OK | MB_ICONWARNING);
+                    L"TypeTide-Win — shortcut unavailable", MB_OK | MB_ICONWARNING);
     }
     if (ok1 && ok2) hotkeyWarningShown_ = false;
 
@@ -168,7 +168,7 @@ void App::quit() {
     ExitProcess(0);
 }
 
-// ---------- 方向决策（与 macOS resolveDirection 一致）----------
+// ---------- 方向决策----------
 
 App::Direction App::resolveDirection(const std::wstring& text, TranslationDirection mode, bool isWrite) const {
     const Settings& s = Settings::shared();
@@ -470,8 +470,6 @@ LRESULT App::handle(UINT msg, WPARAM wp, LPARAM lp) {
         if ((uint64_t)wp == currentReq_ && PopupWindow::shared().isVisible()) {
             if (!done->ok)
                 PopupWindow::shared().setError(done->error);
-            else if (util::Trim(PopupWindow::shared().translation()).empty())
-                PopupWindow::shared().setError(L"No translation returned");
             else
                 PopupWindow::shared().finishTranslation();
         }

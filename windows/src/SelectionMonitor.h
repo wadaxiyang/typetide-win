@@ -1,6 +1,6 @@
 //
 //  SelectionMonitor.h — 全局监听鼠标抬起，检测其他应用里的文字选区
-//  （仅 UIA，不动剪贴板；对应 macOS 的 SelectionMonitor）。
+//  （仅 UIA，不动剪贴板）。
 //
 #pragma once
 #include <windows.h>

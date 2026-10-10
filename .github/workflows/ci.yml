@@ -15,7 +15,7 @@ jobs:
         shell: bash
         run: |
           if git grep -ni -E 'say[pP]ick|say[[:space:]]+pick' -- ':!AGENTS.md'; then
-            echo "Legacy product name found; use TypeTide everywhere."
+            echo "Legacy product name found; use TypeTide-Win everywhere."
             exit 1
           fi
 
@@ -34,37 +34,27 @@ jobs:
         shell: pwsh
         run: |
           # GUI 子系统 exe：& 调用不等待、$LASTEXITCODE 不更新，必须 Start-Process -Wait
-          $env:TYPETIDE_DATA_DIR = "$env:RUNNER_TEMP\typetide-ci"
-          $p = Start-Process -FilePath windows\build\Release\TypeTide.exe `
-              -ArgumentList '--selftest' -NoNewWindow -Wait -PassThru
+          $env:TYPETIDE_DATA_DIR = "$env:RUNNER_TEMP\typetide-win-ci"
+          $p = Start-Process -FilePath windows\build\Release\TypeTide-Win.exe `
+              -ArgumentList '--selftest' -WindowStyle Hidden -Wait -PassThru
           exit $p.ExitCode
 
-      - name: Verify shared version metadata
+      - name: Popup and provider routing regression tests
+        run: ctest --test-dir windows/build -C Release --output-on-failure
+
+      - name: Verify Windows version metadata
         shell: pwsh
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
-          if (-not (Select-String -Quiet -Path windows/CMakeLists.txt -Pattern "project\(TypeTide VERSION $([regex]::Escape($version)) ")) {
+          if (-not (Select-String -Quiet -Path windows/CMakeLists.txt -Pattern "project\(TypeTide-Win VERSION $([regex]::Escape($version)) ")) {
             throw "windows/CMakeLists.txt does not match VERSION=$version"
           }
-          [xml](Get-Content windows/src/TypeTide.manifest -Raw) | Out-Null
-
-  macos:
-    name: macOS unit + end-to-end tests
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: XCTest (unsigned)
-        run: |
-          xcodebuild -project TypeTide.xcodeproj -scheme TypeTide \
-            -configuration Debug -destination 'platform=macOS' \
-            -derivedDataPath "$RUNNER_TEMP/TypeTideDerivedData" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY= test
-        working-directory: macos
-
-      - name: Static analysis
-        run: |
-          xcodebuild -project TypeTide.xcodeproj -scheme TypeTide \
-            -configuration Debug -destination 'platform=macOS' \
-            -derivedDataPath "$RUNNER_TEMP/TypeTideDerivedData" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY= analyze
-        working-directory: macos
+          [xml]$manifest = Get-Content windows/src/TypeTide-Win.manifest -Raw
+          if ($manifest.assembly.assemblyIdentity.version -ne "$version.0") {
+            throw "Manifest version does not match VERSION"
+          }
+          $info = (Get-Item windows/build/Release/TypeTide-Win.exe).VersionInfo
+          if ($info.ProductName -ne 'TypeTide-Win' -or $info.ProductVersion -ne $version) {
+            throw "Executable branding/version does not match"
+          }
+          ./scripts/check-ui-quality.ps1

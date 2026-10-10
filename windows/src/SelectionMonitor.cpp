@@ -5,7 +5,7 @@
 #include "Util.h"
 
 namespace {
-constexpr wchar_t kClassName[] = L"TypeTideSelectionMonitor";
+constexpr wchar_t kClassName[] = L"TypeTide-WinSelectionMonitor";
 constexpr UINT_PTR kSettleTimer = 1;
 } // namespace
 

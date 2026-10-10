@@ -4,6 +4,47 @@
 #include "Util.h"
 #include <fstream>
 #include <sstream>
+#include <objbase.h>
+
+const char* ProviderKindCode(TranslationBackend kind) {
+    switch (kind) {
+    case TranslationBackend::OpenAI: return "openai";
+    case TranslationBackend::Anthropic: return "anthropic";
+    case TranslationBackend::Gemini: return "gemini";
+    default: return "ollama";
+    }
+}
+ProviderConfig NewProvider(TranslationBackend kind) {
+    ProviderConfig p;
+    GUID guid{}; CoCreateGuid(&guid);
+    wchar_t id[40]{}; StringFromGUID2(guid, id, 40);
+    p.id = util::Narrow(id);
+    p.kind = kind;
+    if (kind != TranslationBackend::Ollama) p.model.clear();
+    switch (kind) {
+    case TranslationBackend::OpenAI: p.name = "OpenAI"; p.baseURL = "https://api.openai.com/v1"; break;
+    case TranslationBackend::Anthropic: p.name = "Anthropic"; p.baseURL = "https://api.anthropic.com/v1"; break;
+    case TranslationBackend::Gemini: p.name = "Gemini"; p.baseURL = "https://generativelanguage.googleapis.com/v1beta"; break;
+    default: break;
+    }
+    return p;
+}
+std::vector<ProviderConfig> Settings::effectiveProviders() const {
+    if (providersConfigured) return providers;
+    ProviderConfig p;
+    p.id = "legacy-primary";
+    p.kind = backend;
+    p.name = backend == TranslationBackend::Ollama ? "Ollama" : "OpenAI-compatible";
+    p.baseURL = backend == TranslationBackend::Ollama ? ollamaHost + ":" + std::to_string(ollamaPort) : openAIBaseURL;
+    p.model = backend == TranslationBackend::Ollama ? ollamaModel : openAIModel;
+    p.apiKey = backend == TranslationBackend::Ollama ? "" : openAIKey;
+    return {p};
+}
+void Settings::ensureProviders() {
+    if (providersConfigured) return;
+    providers = effectiveProviders();
+    providersConfigured = true;
+}
 
 std::wstring Hotkey::displayString() const {
     if (!isConfigured()) return L"Not set";
@@ -40,6 +81,15 @@ std::wstring Settings::filePath() {
     return util::AppDataDir() + L"\\settings.json";
 }
 
+bool Settings::useDarkMode() const {
+    if (appearance != Appearance::System) return appearance == Appearance::Dark;
+    DWORD light = 1, size = sizeof(light);
+    RegGetValueW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size);
+    return light == 0;
+}
+
 void Settings::load() {
     std::ifstream f(filePath(), std::ios::binary);
     if (!f) return;
@@ -67,6 +117,8 @@ void Settings::load() {
     };
 
     enabled = boolean("enabled", enabled);
+    const std::string theme = str("appearance", "system");
+    appearance = theme == "dark" ? Appearance::Dark : theme == "light" ? Appearance::Light : Appearance::System;
     backend = str("backend", "ollama") == "openai" ? TranslationBackend::OpenAI : TranslationBackend::Ollama;
 
     ollamaHost = str("ollamaHost", ollamaHost);
@@ -94,6 +146,27 @@ void Settings::load() {
     }
     openAIModel = str("openAIModel", openAIModel);
     if (openAIModel.size() > 256) openAIModel = "gpt-5-mini";
+
+    providersConfigured = root["providers"].isArray();
+    providers.clear();
+    if (const auto* entries = root["providers"].array()) {
+        for (const auto& entry : *entries) {
+            if (!entry.isObject() || providers.size() >= 32) continue;
+            const auto kind = entry["kind"].asString();
+            if (kind != "ollama" && kind != "openai" && kind != "anthropic" && kind != "gemini") continue;
+            ProviderConfig p;
+            p.kind = kind == "openai" ? TranslationBackend::OpenAI : kind == "anthropic" ? TranslationBackend::Anthropic : kind == "gemini" ? TranslationBackend::Gemini : TranslationBackend::Ollama;
+            p.id = entry["id"].asString();
+            bool duplicate = false;
+            for (const auto& existing : providers) if (existing.id == p.id) duplicate = true;
+            if (p.id.empty() || p.id.size() > 80 || duplicate) continue;
+            p.name = entry["name"].asString().substr(0, 100);
+            p.baseURL = entry["baseURL"].asString().substr(0, 2048);
+            p.model = entry["model"].asString().substr(0, 256);
+            p.apiKey = isolatedTest ? entry["apiKey"].asString() : credentials::LoadProviderKey(p.id);
+            providers.push_back(std::move(p));
+        }
+    }
 
     if (auto l = lang::FromCode(str("nativeLanguage", ""))) nativeLanguage = *l;
     if (auto l = lang::FromCode(str("foreignLanguage", ""))) foreignLanguage = *l;
@@ -155,6 +228,7 @@ void Settings::load() {
 bool Settings::save() const {
     json::Object root;
     root["enabled"] = enabled;
+    root["appearance"] = appearance == Appearance::Dark ? "dark" : appearance == Appearance::Light ? "light" : "system";
     root["backend"] = backend == TranslationBackend::OpenAI ? "openai" : "ollama";
 
     root["ollamaHost"] = ollamaHost;
@@ -170,6 +244,20 @@ bool Settings::save() const {
         return false;
     }
     root["openAIModel"] = openAIModel;
+
+    if (providersConfigured) {
+        json::Array entries;
+        for (const auto& p : providers) {
+            json::Object item;
+            item["id"] = p.id; item["name"] = p.name;
+            item["kind"] = ProviderKindCode(p.kind);
+            item["baseURL"] = p.baseURL; item["model"] = p.model;
+            if (isolatedTest) item["apiKey"] = p.apiKey;
+            else if (!credentials::SaveProviderKey(p.id, p.apiKey)) return false;
+            entries.emplace_back(std::move(item));
+        }
+        root["providers"] = std::move(entries);
+    }
 
     root["nativeLanguage"] = lang::Code(nativeLanguage);
     root["foreignLanguage"] = lang::Code(foreignLanguage);

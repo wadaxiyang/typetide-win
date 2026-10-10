@@ -1,5 +1,5 @@
 //
-//  UpdateChecker.h — GitHub Releases 版本检测（对应 macOS 的 UpdateChecker）。
+//  UpdateChecker.h — GitHub Releases 版本检测。
 //
 #pragma once
 #include <windows.h>

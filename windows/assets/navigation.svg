@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <symbol id="general" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
+    <path d="M 12 2 L 12 5 M 12 19 L 12 22 M 2 12 L 5 12 M 19 12 L 22 12 M 5 5 L 7 7 M 17 17 L 19 19 M 5 19 L 7 17 M 17 7 L 19 5"/>
+  </symbol>
+  <symbol id="backend" viewBox="0 0 24 24">
+    <path d="M 4 3 L 20 3 L 20 10 L 4 10 Z M 4 14 L 20 14 L 20 21 L 4 21 Z M 8 6 L 8 7 M 8 17 L 8 18 M 12 7 L 16 7 M 12 18 L 16 18"/>
+  </symbol>
+  <symbol id="language" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="9"/>
+    <path d="M 3 12 L 21 12 M 12 3 C 5 8 5 16 12 21 C 19 16 19 8 12 3 Z"/>
+  </symbol>
+  <symbol id="shortcuts" viewBox="0 0 24 24">
+    <path d="M 3 5 L 21 5 L 21 19 L 3 19 Z M 7 9 L 8 9 M 12 9 L 13 9 M 17 9 L 18 9 M 7 12 L 8 12 M 12 12 L 13 12 M 17 12 L 18 12 M 8 16 L 16 16"/>
+  </symbol>
+  <symbol id="behavior" viewBox="0 0 24 24">
+    <path d="M 3 5 L 8 5 M 12 5 L 21 5 M 3 12 L 14 12 M 18 12 L 21 12 M 3 19 L 6 19 M 10 19 L 21 19"/>
+    <circle cx="10" cy="5" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="19" r="2"/>
+  </symbol>
+  <symbol id="excluded" viewBox="0 0 24 24">
+    <path d="M 3 7 L 17 7 L 17 21 L 3 21 Z M 7 3 L 21 3 L 21 17 M 7 11 L 13 17 M 13 11 L 7 17"/>
+  </symbol>
+  <symbol id="diagnostics" viewBox="0 0 24 24">
+    <path d="M 2 12 L 6 12 L 9 4 L 14 20 L 17 12 L 22 12"/>
+  </symbol>
+  <symbol id="about" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="9"/><path d="M 12 7 L 12 7.2 M 12 11 L 12 17"/>
+  </symbol>
+</svg>

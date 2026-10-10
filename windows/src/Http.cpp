@@ -44,7 +44,7 @@ Result request(const std::wstring& url,
     }
     bool secure = uc.nScheme == INTERNET_SCHEME_HTTPS;
 
-    Handle session(WinHttpOpen(L"TypeTide/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    Handle session(WinHttpOpen(L"TypeTide-Win/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
     if (!session) { r.error = lastError("WinHttpOpen"); return r; }
 
@@ -76,6 +76,7 @@ Result request(const std::wstring& url,
                         WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX);
     r.status = (int)status;
 
+    size_t received = 0;
     std::vector<char> buf(16 * 1024);
     for (;;) {
         if (cancel && cancel->load()) { r.error = "Cancelled"; return r; }
@@ -89,6 +90,8 @@ Result request(const std::wstring& url,
             if (!WinHttpReadData(req.h, buf.data(), toRead, &got)) { r.error = lastError("Read"); return r; }
             if (got == 0) break;
             avail -= got;
+            received += got;
+            if (received > kMaxBufferedResponse) { r.error = "Response too large"; return r; }
             if (onChunk && status >= 200 && status < 300) {
                 (*onChunk)(buf.data(), got);
             } else {

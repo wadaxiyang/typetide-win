@@ -1,5 +1,5 @@
 //
-//  Keyboard.h — 合成按键（对应 macOS 的 Keyboard）。
+//  Keyboard.h — 合成按键。
 //
 #pragma once
 #include <windows.h>

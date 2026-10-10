@@ -1,12 +1,12 @@
 //
 //  Translator.h — 翻译服务：提示词、Ollama / OpenAI 兼容后端（流式）、LRU 缓存。
-//  对应 macOS 的 TranslationService + providers。
 //
 //  stream() 在工作线程执行，回调也在工作线程触发；
 //  UI 侧（App）负责用 PostMessage 转回主线程。缓存命中时回调在调用线程同步触发。
 //
 #pragma once
 #include "Language.h"
+#include "Settings.h"
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -29,7 +29,7 @@ struct HealthCheckResult {
     int totalMs = 0;
 };
 
-/// 提示词构造（与 macOS TranslationPrompt 保持一致）
+/// 提示词构造
 std::string SystemPrompt(Language target, std::optional<Language> source, RewriteStyle style);
 std::string PlainPrompt(const std::wstring& text, Language target, std::optional<Language> source, RewriteStyle style);
 
@@ -50,7 +50,11 @@ std::optional<std::wstring> TranslateFully(const TranslationRequest& req, std::w
 
 /// Async backend health check using fixed synthetic text. Invoke on the main thread so
 /// backend settings are snapshotted safely; completion runs on a worker thread.
-void CheckHealthAsync(std::function<void(HealthCheckResult)> completion);
+void CheckHealthAsync(std::function<void(HealthCheckResult)> completion,
+                      std::optional<ProviderConfig> selected = std::nullopt);
+
+uint64_t StreamWithProviders(const TranslationRequest& req, std::vector<ProviderConfig> providers,
+                             DeltaFn onDelta, DoneFn onDone, bool useCache = true);
 
 /// 测试钩子：清空缓存
 void ClearCacheForTesting();

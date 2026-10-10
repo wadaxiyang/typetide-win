@@ -1,6 +1,6 @@
 //
 //  OllamaModels.h — Ollama 已装模型列表与默认模型自动纠正
-//  （对应 macOS 的 OllamaModelResolver + ModelsSettingsView 数据源）。
+//  。
 //
 //  线程约定：Settings 只在主线程读写。异步接口在调用线程拍好
 //  host/port 快照带进工作线程，结果 PostMessage 回主线程处理。
