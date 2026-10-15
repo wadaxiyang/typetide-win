@@ -51,13 +51,13 @@ bool BuildRequest(const ProviderConfig& p, const TranslationRequest& input,
     if (!Validate(p, error)) return false;
     auto base = baseURL(p.baseURL);
     json::Object body;
-    const auto system = translator::SystemPrompt(input.target, input.source, input.style);
+    const auto system = translator::RenderPrompt(input);
     const auto text = util::Narrow(input.text);
     out = {};
     switch (p.kind) {
     case TranslationBackend::Ollama:
         out.url = util::Widen(base + "/api/generate");
-        body = {{"model", p.model}, {"prompt", translator::PlainPrompt(input.text, input.target, input.source, input.style)},
+        body = {{"model", p.model}, {"prompt", system + "\n\n" + text},
                 {"stream", true}, {"keep_alive", "10m"}, {"options", json::Object{{"temperature", 0.3}}}};
         if (disableThink) body["think"] = false;
         if (!p.apiKey.empty()) out.headers = L"Authorization: Bearer " + util::Widen(p.apiKey) + L"\r\n";

@@ -20,6 +20,7 @@ public:
 
     std::function<void()> onToggleEnabled;
     std::function<void()> onOpenSettings;
+    std::function<void()> onOpenInput;
     std::function<void()> onOpenReleases;
     std::function<void()> onQuit;
 

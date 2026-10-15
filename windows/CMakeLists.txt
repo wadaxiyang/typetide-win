@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TypeTide-Win VERSION 0.2.0 LANGUAGES CXX)
+project(TypeTide-Win VERSION 0.2.1 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "TypeTide-Win requires Windows and the Windows SDK")
@@ -31,6 +31,7 @@ add_executable(TypeTide-Win WIN32
     src/SelectionCapture.cpp
     src/TextReplacer.cpp
     src/Hooks.cpp
+    src/InputWindow.cpp
     src/PopupWindow.cpp
     src/SelectionIcon.cpp
     src/SelectionMonitor.cpp

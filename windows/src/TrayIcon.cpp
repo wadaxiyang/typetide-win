@@ -8,21 +8,12 @@ enum MenuId : UINT {
     kMenuToggle,
     kMenuReadHint,
     kMenuRewriteHint,
+    kMenuInput,
     kMenuSettings,
     kMenuQuit,
 };
 
-const wchar_t* actionName(ShortcutAction action) {
-    switch (action) {
-    case ShortcutAction::NativePopup: return L"To native · popup";
-    case ShortcutAction::ForeignPopup: return L"To foreign · popup";
-    case ShortcutAction::SmartReplace: return L"Smart translate · replace";
-    case ShortcutAction::NativeReplace: return L"To native · replace";
-    case ShortcutAction::ForeignReplace: return L"To foreign · replace";
-    case ShortcutAction::SmartPopup:
-    default: return L"Smart translate · popup";
-    }
-}
+
 }
 
 void TrayIcon::add(HWND owner, UINT callbackMessage) {
@@ -62,12 +53,13 @@ void TrayIcon::showMenu(HWND owner) {
                 s.enabled ? L"TypeTide-Win is On" : L"TypeTide-Win is Off");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
-    std::wstring readHint = std::wstring(actionName(s.readShortcutAction)) + L":  " + s.readShortcut.displayString();
-    std::wstring rewriteHint = std::wstring(actionName(s.rewriteShortcutAction)) + L":  " + s.rewriteShortcut.displayString();
+    std::wstring readHint = std::wstring(L"Selection translation") + L":  " + s.readShortcut.displayString();
+    std::wstring rewriteHint = std::wstring(L"Rewrite & replace") + L":  " + s.rewriteShortcut.displayString();
     AppendMenuW(menu, MF_STRING | MF_GRAYED, kMenuReadHint, readHint.c_str());
     AppendMenuW(menu, MF_STRING | MF_GRAYED, kMenuRewriteHint, rewriteHint.c_str());
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
+    AppendMenuW(menu, MF_STRING, kMenuInput, (L"Input translation\t" + s.inputShortcut.displayString()).c_str());
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"Settings…");
     AppendMenuW(menu, MF_STRING, kMenuQuit, L"Quit TypeTide-Win");
 
@@ -84,6 +76,9 @@ void TrayIcon::showMenu(HWND owner) {
         break;
     case kMenuToggle:
         if (onToggleEnabled) onToggleEnabled();
+        break;
+    case kMenuInput:
+        if (onOpenInput) onOpenInput();
         break;
     case kMenuSettings:
         if (onOpenSettings) onOpenSettings();

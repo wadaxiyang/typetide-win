@@ -6,10 +6,10 @@ namespace {
 /// 打开剪贴板（短重试，其他进程可能占用）
 struct Opener {
     bool ok = false;
-    Opener() {
-        for (int i = 0; i < 5; ++i) {
+    explicit Opener(bool retry = true) {
+        for (int i = 0; i < (retry ? 5 : 1); ++i) {
             if (OpenClipboard(nullptr)) { ok = true; return; }
-            Sleep(10);
+            if (retry && i < 4) Sleep(10);
         }
     }
     ~Opener() { if (ok) CloseClipboard(); }
@@ -28,8 +28,8 @@ std::optional<std::wstring> GetText() {
     return text;
 }
 
-bool SetText(const std::wstring& text) {
-    Opener open;
+bool SetText(const std::wstring& text, bool retry) {
+    Opener open(retry);
     if (!open.ok) return false;
     EmptyClipboard();
     size_t bytes = (text.size() + 1) * sizeof(wchar_t);

@@ -4,6 +4,7 @@
 //
 #include <windows.h>
 #include "App.h"
+#include "InputWindow.h"
 #include "SettingsWindow.h"
 #include "CrashDump.h"
 #include "SelfTest.h"
@@ -51,6 +52,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (InputWindow::processMessage(&msg)) continue;
         if (SettingsWindow::processMessage(&msg)) continue;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);

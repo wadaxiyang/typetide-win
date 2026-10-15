@@ -169,4 +169,44 @@ inline void Navigation(Gdiplus::GraphicsPath& p, int index) {
         break;
     }
 }
+inline void Action(Gdiplus::GraphicsPath& p, int index) {
+    switch (index) {
+    case 0: // copy
+    p.StartFigure();
+    p.AddLine(9.f, 8.f, 19.f, 8.f);
+    p.AddBezier(19.f, 8.f, 20.f, 8.f, 21.f, 9.f, 21.f, 10.f);
+    p.AddLine(21.f, 10.f, 21.f, 20.f);
+    p.AddBezier(21.f, 20.f, 21.f, 21.f, 20.f, 22.f, 19.f, 22.f);
+    p.AddLine(19.f, 22.f, 9.f, 22.f);
+    p.AddBezier(9.f, 22.f, 8.f, 22.f, 7.f, 21.f, 7.f, 20.f);
+    p.AddLine(7.f, 20.f, 7.f, 10.f);
+    p.AddBezier(7.f, 10.f, 7.f, 9.f, 8.f, 8.f, 9.f, 8.f);
+    p.CloseFigure();
+    p.StartFigure();
+    p.AddLine(16.f, 4.f, 16.f, 3.f);
+    p.AddBezier(16.f, 3.f, 16.f, 2.f, 15.f, 1.f, 14.f, 1.f);
+    p.AddLine(14.f, 1.f, 4.f, 1.f);
+    p.AddBezier(4.f, 1.f, 3.f, 1.f, 2.f, 2.f, 2.f, 3.f);
+    p.AddLine(2.f, 3.f, 2.f, 14.f);
+    p.AddBezier(2.f, 14.f, 2.f, 15.f, 3.f, 16.f, 4.f, 16.f);
+        break;
+    case 1: // exchange
+    p.StartFigure();
+    p.AddLine(4.f, 7.f, 20.f, 7.f);
+    p.StartFigure();
+    p.AddLine(16.f, 3.f, 20.f, 7.f);
+    p.AddLine(20.f, 7.f, 16.f, 11.f);
+    p.StartFigure();
+    p.AddLine(20.f, 17.f, 4.f, 17.f);
+    p.StartFigure();
+    p.AddLine(8.f, 13.f, 4.f, 17.f);
+    p.AddLine(4.f, 17.f, 8.f, 21.f);
+        break;
+    case 2: // check
+    p.StartFigure();
+    p.AddLine(5.f, 12.f, 10.f, 17.f);
+    p.AddLine(10.f, 17.f, 20.f, 7.f);
+        break;
+    }
+}
 } // namespace svgpaths

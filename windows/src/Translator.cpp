@@ -85,6 +85,8 @@ std::string cacheKey(const TranslationRequest& req, const char* backend) {
     k += '|';
     k += lang::StyleCode(req.style);
     k += '|';
+    k += std::to_string(req.prompt.size()) + ":" + req.prompt;
+    k += req.preserveLanguage ? "|same|" : "|translate|";
     k += util::Narrow(req.text);
     return k;
 }
@@ -189,6 +191,26 @@ std::string providerCacheIdentity(const std::vector<ProviderConfig>& providers) 
 }
 
 } // namespace
+
+const char* DefaultPromptTemplate() {
+    return "You are a professional translation engine. Translate the user's text from {source} into {target}.{style} Output ONLY the translation, with no quotes, no explanations, no extra notes. Preserve the original meaning and formatting.";
+}
+std::string RenderPrompt(const TranslationRequest& req) {
+    const std::string pattern = req.prompt.empty() ? DefaultPromptTemplate() : req.prompt;
+    // Single pass: placeholder values are never interpreted as more templates.
+    std::string result;
+    for (size_t i = 0; i < pattern.size();) {
+        if (pattern.compare(i, 8, "{source}") == 0) {
+            result += req.source ? lang::PromptName(*req.source) : "the detected language"; i += 8;
+        } else if (pattern.compare(i, 8, "{target}") == 0) {
+            result += req.preserveLanguage ? "the same language as the original text" : lang::PromptName(req.target); i += 8;
+        } else if (pattern.compare(i, 7, "{style}") == 0) {
+            result += styleSuffix(req.style); i += 7;
+        } else result += pattern[i++];
+    }
+    if (req.preserveLanguage) result += " Keep the original language; rewrite the text without translating it.";
+    return result;
+}
 
 std::string SystemPrompt(Language target, std::optional<Language> source, RewriteStyle style) {
     std::string from = source ? lang::PromptName(*source) : "the detected language";

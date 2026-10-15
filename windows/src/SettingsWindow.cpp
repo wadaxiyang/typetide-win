@@ -1,4 +1,6 @@
 #include "SettingsWindow.h"
+#include "FeatureControls.h"
+#include "InputWindow.h"
 #include "App.h"
 #include "LaunchAtLogin.h"
 #include "LocalDiagnostics.h"
@@ -38,17 +40,8 @@ enum CtrlId : int {
     kProviderName, kProviderKind, kProviderURL, kProviderModel, kProviderKey,
     kProviderSave, kProviderCancel, kProviderHint, kProviderEditorTitle, kProviderKeyHint,
     kBackendTest, kBackendStatus,
-    // Language
-    kNativeLabel, kNative, kForeignLabel, kForeign,
-    kReadDirLabel, kReadDir, kRewriteDirLabel, kRewriteDir, kLangWarn,
-    // Shortcuts
-    kHkReadLabel, kHkRead, kReadWin, kHkReadClear,
-    kHkRewriteLabel, kHkRewrite, kRewriteWin, kHkRewriteClear,
-    kReadActionLabel, kReadAction, kRewriteActionLabel, kRewriteAction,
-    kHkRestoreDefaults, kHkVerify, kHkNote,
-    // Behavior
-    kTriggerLabel, kTrigger, kPreview,
-    kReadStyleLabel, kReadStyle, kRewriteStyleLabel, kRewriteStyle,
+    // Shared language defaults
+    kNativeLabel, kNative, kForeignLabel, kForeign, kLangWarn,
     // Skip apps
     kSkipEdit, kSkipAdd, kSkipList, kSkipRemove, kSkipHint,
     // Diagnostics
@@ -56,6 +49,11 @@ enum CtrlId : int {
     // About
     kAboutTitle, kAboutDesc, kAboutLinks,
     kAppearanceLabel, kAppearance,
+    kFeature0, kFeature1, kFeature2, kFeatureNotice,
+    kFeatureBack, kFeatureHotkey, kFeatureWin, kFeatureClear, kFeatureStatus,
+    kFeatureSource, kFeatureTarget, kFeatureLanguageHint, kFeatureProvider, kFeatureRoute,
+    kFeatureStyle, kFeatureTrigger, kFeaturePreview, kFeatureBehaviorLabel,
+    kFeaturePrompt, kFeaturePromptReset, kFeatureSave, kFeatureCancel,
     // Page headings (must remain contiguous)
     kPageTitle0, kPageTitle1, kPageTitle2, kPageTitle3,
     kPageTitle4, kPageTitle5, kPageTitle6, kPageTitle7,
@@ -79,8 +77,13 @@ struct State {
     ProviderConfig providerDraft;
     std::vector<HWND> providerListControls, providerEditorControls;
     int currentPage = 0;
+    Feature selectedFeature = Feature::Selection;
+    FeatureConfig featureDraft;
+    Hotkey featureHotkey;
+    bool featureDirty = false;
     int clientWidth = 0;
     int clientHeight = 0;
+    int scrollY = 0;
 };
 
 State g;
@@ -178,7 +181,7 @@ void updateFirstRunCompletion() {
     if (ctrl(kFirstRunHint)) {
         SetWindowTextW(ctrl(kFirstRunHint), s.hasCompletedFirstLaunch
             ? L"Setup checks complete. TypeTide-Win is ready."
-            : L"First run: add a provider and verify both shortcuts before relying on TypeTide-Win.");
+            : L"First run: add a provider and verify the shortcuts before relying on TypeTide-Win.");
     }
 }
 
@@ -226,20 +229,6 @@ Language comboLanguage(HWND combo) {
     return lang::All[idx];
 }
 
-void fillDirectionCombo(HWND combo, TranslationDirection selected) {
-    const Settings& s = Settings::shared();
-    std::wstring native = lang::ShortName(s.nativeLanguage);
-    std::wstring foreign = lang::ShortName(s.foreignLanguage);
-    std::wstring items[] = {
-        L"Auto · bidirectional",
-        native + L" → " + foreign,
-        foreign + L" → " + native,
-    };
-    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-    for (auto& it : items) SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)it.c_str());
-    SendMessageW(combo, CB_SETCURSEL, (int)selected, 0);
-}
-
 void fillStyleCombo(HWND combo, RewriteStyle selected) {
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
     const RewriteStyle all[] = {RewriteStyle::Faithful, RewriteStyle::Formal,
@@ -257,23 +246,7 @@ RewriteStyle comboStyle(HWND combo) {
     return (idx >= 0 && idx < 4) ? all[idx] : RewriteStyle::Faithful;
 }
 
-void fillShortcutActionCombo(HWND combo, ShortcutAction selected) {
-    const wchar_t* names[] = {
-        L"Smart translate · popup", L"Translate to native language · popup",
-        L"Translate to foreign language · popup", L"Smart translate · replace",
-        L"Translate to native language · replace", L"Translate to foreign language · replace",
-    };
-    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-    for (const auto* name : names) SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)name);
-    SendMessageW(combo, CB_SETCURSEL, (int)selected, 0);
-}
-
-std::wstring editText(HWND edit) {
-    int n = GetWindowTextLengthW(edit);
-    std::wstring s(n, 0);
-    if (n) GetWindowTextW(edit, s.data(), n + 1);
-    return s;
-}
+std::wstring editText(HWND control) { return featureui::text(control); }
 
 // HOTKEY 控件 ⇄ RegisterHotKey 修饰键转换
 WORD hotkeyToControl(const Hotkey& hk) {
@@ -293,14 +266,6 @@ Hotkey hotkeyFromControl(WORD w) {
     if (flags & HOTKEYF_CONTROL) hk.modifiers |= MOD_CONTROL;
     if (flags & HOTKEYF_ALT) hk.modifiers |= MOD_ALT;
     return hk;
-}
-
-void updateShortcutControls() {
-    const Settings& s = Settings::shared();
-    EnableWindow(ctrl(kReadWin), s.readShortcut.isConfigured());
-    EnableWindow(ctrl(kRewriteWin), s.rewriteShortcut.isConfigured());
-    EnableWindow(ctrl(kHkReadClear), s.readShortcut.isConfigured());
-    EnableWindow(ctrl(kHkRewriteClear), s.rewriteShortcut.isConfigured());
 }
 
 // ---------- 页构建 ----------
@@ -375,10 +340,11 @@ void buildPages() {
     g.providerEditing = false;
     g.providerTesting = false;
     g.pages.assign(8, {});
+    g.featureDirty = false;
     const int x = 222, w = 560;
     int y;
     const wchar_t* pageTitles[] = {
-        L"General", L"Providers", L"Translation rules", L"Shortcuts & triggers",
+        L"General", L"Providers", L"Features", L"Feature settings",
         L"Behavior", L"Excluded apps", L"Diagnostics", L"About & diagnostics"
     };
     for (int page = 0; page < 8; ++page) {
@@ -410,6 +376,7 @@ void buildPages() {
     for (const wchar_t* item : {L"Follow Windows", L"Light", L"Dark"})
         SendMessageW(ctrl(kAppearance), CB_ADDSTRING, 0, (LPARAM)item);
     SendMessageW(ctrl(kAppearance), CB_SETCURSEL, (WPARAM)s.appearance, 0);
+    g.shortcutsReady = App::shared().shortcutsRegistered();
     updateFirstRunCompletion();
 
     // Providers: an ordered list and an explicit Save/Cancel editor.
@@ -454,85 +421,54 @@ void buildPages() {
     g.pages[1].insert(g.pages[1].end(), g.providerEditorControls.begin(), g.providerEditorControls.end());
     refreshProviders();
 
-    // --- 2 Language ---
-    y = 82;
-    {
-    std::vector<HWND> controls = {
-        makeLabel(L"Native language:", x, y + 3, 120, kNativeLabel),
-        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, x + 140, y, 240, 300, kNative),
-        makeLabel(L"Foreign language:", x, y + 37, 120, kForeignLabel),
-        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, x + 140, y + 34, 240, 300, kForeign),
-        makeLabel(L"Read direction:", x, y + 85, 120, kReadDirLabel),
-        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 140, y + 82, 240, 200, kReadDir),
-        makeLabel(L"Rewrite direction:", x, y + 119, 120, kRewriteDirLabel),
-        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 140, y + 116, 240, 200, kRewriteDir),
-        makeLabel(L"", x, y + 156, w, kLangWarn),
-    };
-    g.pages[2].insert(g.pages[2].end(), controls.begin(), controls.end());
-    }
+    // Shared language preferences are set once; features may override them.
+    g.pages[0].push_back(makeLabel(L"LANGUAGE DEFAULTS", x, 474, w, -1, true));
+    g.pages[0].push_back(makeLabel(L"Native language", x, 510, 170, kNativeLabel));
+    g.pages[0].push_back(make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 190, 506, 300, 260, kNative));
+    g.pages[0].push_back(makeLabel(L"Common foreign language", x, 552, 180, kForeignLabel));
+    g.pages[0].push_back(make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 190, 548, 300, 260, kForeign));
+    g.pages[0].push_back(make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, x, 596, w, 48, kLangWarn));
     fillLanguageCombo(ctrl(kNative), s.nativeLanguage);
     fillLanguageCombo(ctrl(kForeign), s.foreignLanguage);
-    fillDirectionCombo(ctrl(kReadDir), s.readDirection);
-    fillDirectionCombo(ctrl(kRewriteDir), s.rewriteDirection);
     updateLangWarn();
-    // 警告区两行高
-    SetWindowPos(ctrl(kLangWarn), nullptr, px(x), px(y + 156), px(w), px(40), SWP_NOZORDER);
 
-    // --- 3 Shortcuts ---
-    y = 82;
-    {
-    std::vector<HWND> controls = {
-        makeLabel(L"Translate selection (read):", x, y + 4, 180, kHkReadLabel),
-        make(HOTKEY_CLASSW, L"", WS_TABSTOP, x + 195, y, 155, 24, kHkRead),
-        make(L"BUTTON", L"Win key", WS_TABSTOP | BS_AUTOCHECKBOX, x + 365, y + 1, 80, 22, kReadWin),
-        make(L"BUTTON", L"Clear", WS_TABSTOP | BS_PUSHBUTTON, x + 455, y, 64, 24, kHkReadClear),
-        makeLabel(L"Rewrite & replace (write):", x, y + 38, 180, kHkRewriteLabel),
-        make(HOTKEY_CLASSW, L"", WS_TABSTOP, x + 195, y + 34, 155, 24, kHkRewrite),
-        make(L"BUTTON", L"Win key", WS_TABSTOP | BS_AUTOCHECKBOX, x + 365, y + 35, 80, 22, kRewriteWin),
-        make(L"BUTTON", L"Clear", WS_TABSTOP | BS_PUSHBUTTON, x + 455, y + 34, 64, 24, kHkRewriteClear),
-        makeLabel(L"Translate action:", x, y + 76, 180, kReadActionLabel),
-        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 195, y + 72, 300, 220, kReadAction),
-        makeLabel(L"Rewrite action:", x, y + 110, 180, kRewriteActionLabel),
-        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 195, y + 106, 300, 220, kRewriteAction),
-        make(L"BUTTON", L"Restore defaults", WS_TABSTOP | BS_PUSHBUTTON, x, y + 150, 120, 28, kHkRestoreDefaults),
-        make(L"BUTTON", L"Verify shortcuts", WS_TABSTOP | BS_PUSHBUTTON, x + 130, y + 150, 120, 28, kHkVerify),
-        makeLabel(L"Changes apply immediately. Keep at least one shortcut; configured shortcuts must be different.",
-                  x, y + 190, w, kHkNote),
-    };
-    g.pages[3].insert(g.pages[3].end(), controls.begin(), controls.end());
-    }
-    SendMessageW(ctrl(kHkRead), HKM_SETHOTKEY, hotkeyToControl(s.readShortcut), 0);
-    SendMessageW(ctrl(kHkRewrite), HKM_SETHOTKEY, hotkeyToControl(s.rewriteShortcut), 0);
-    CheckDlgButton(g.hwnd, kReadWin, s.readShortcut.modifiers & MOD_WIN ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(g.hwnd, kRewriteWin, s.rewriteShortcut.modifiers & MOD_WIN ? BST_CHECKED : BST_UNCHECKED);
-    updateShortcutControls();
-    fillShortcutActionCombo(ctrl(kReadAction), s.readShortcutAction);
-    fillShortcutActionCombo(ctrl(kRewriteAction), s.rewriteShortcutAction);
+    // Features overview: exactly three stable actions, each with its own settings.
+    for (int i = 0; i < 3; ++i)
+        g.pages[2].push_back(make(L"BUTTON", FeatureName((Feature)i), WS_TABSTOP | BS_OWNERDRAW,
+            x, 94 + i * 128, w, 108, kFeature0 + i));
+    g.pages[2].push_back(make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, x, 496, w, 116, kFeatureNotice));
 
-    // --- 4 Behavior ---
-    y = 82;
-    {
-    std::vector<HWND> controls = {
-        makeLabel(L"On text selection:", x, y + 3, 130, kTriggerLabel),
-        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 150, y, 230, 200, kTrigger),
-        make(L"BUTTON", L"Preview before replacing (rewrite)", WS_TABSTOP | BS_AUTOCHECKBOX,
-             x, y + 44, w, 22, kPreview),
-        makeLabel(L"Read style:", x, y + 87, 130, kReadStyleLabel),
-        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 150, y + 84, 230, 200, kReadStyle),
-        makeLabel(L"Rewrite style:", x, y + 121, 130, kRewriteStyleLabel),
-        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 150, y + 118, 230, 200, kRewriteStyle),
-    };
-    g.pages[4].insert(g.pages[4].end(), controls.begin(), controls.end());
-    }
-    {
-        HWND trig = ctrl(kTrigger);
-        const wchar_t* items[] = {L"Off (shortcut only)", L"Show floating icon", L"Auto-translate"};
-        for (auto* it : items) SendMessageW(trig, CB_ADDSTRING, 0, (LPARAM)it);
-        SendMessageW(trig, CB_SETCURSEL, (int)s.selectionTrigger, 0);
-    }
-    CheckDlgButton(g.hwnd, kPreview, s.rewritePreview ? BST_CHECKED : BST_UNCHECKED);
-    fillStyleCombo(ctrl(kReadStyle), s.readStyle);
-    fillStyleCombo(ctrl(kRewriteStyle), s.rewriteStyle);
+    g.pages[3].insert(g.pages[3].end(), {
+        make(L"BUTTON", L"← Features", WS_TABSTOP | BS_PUSHBUTTON, x, 76, 112, 28, kFeatureBack),
+        makeLabel(L"Shortcut", x, 124, 120, -1),
+        make(HOTKEY_CLASSW, L"", WS_TABSTOP, x + 142, 118, 210, 28, kFeatureHotkey),
+        make(L"BUTTON", L"Win", WS_TABSTOP | BS_AUTOCHECKBOX, x + 364, 120, 64, 26, kFeatureWin),
+        make(L"BUTTON", L"Clear", WS_TABSTOP | BS_PUSHBUTTON, x + 446, 118, 80, 28, kFeatureClear),
+        makeLabel(L"", x + 142, 152, w - 142, kFeatureStatus),
+        makeLabel(L"Source language", x, 186, 250, -1),
+        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, x, 210, 266, 280, kFeatureSource),
+        makeLabel(L"Target rule", x + 290, 186, 250, -1),
+        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, x + 290, 210, 270, 280, kFeatureTarget),
+        make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, x, 246, w, 40, kFeatureLanguageHint),
+        makeLabel(L"Provider", x, 300, 120, -1),
+        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, x + 142, 294, w - 142, 280, kFeatureProvider),
+        make(L"STATIC", L"", SS_LEFT | SS_NOPREFIX, x, 332, w, 46, kFeatureRoute),
+        makeLabel(L"Output style", x, 388, 120, -1),
+        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 142, 382, 270, 180, kFeatureStyle),
+        makeLabel(L"Selection trigger", x, 430, 130, kFeatureBehaviorLabel),
+        make(L"COMBOBOX", L"", WS_TABSTOP | CBS_DROPDOWNLIST, x + 142, 424, w - 142, 200, kFeatureTrigger),
+        make(L"BUTTON", L"Preview before replacing", WS_TABSTOP | BS_AUTOCHECKBOX, x, 424, w, 28, kFeaturePreview),
+        makeLabel(L"Provider prompt", x, 470, w, -1, true),
+        make(L"EDIT", L"", WS_TABSTOP | WS_BORDER | ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL | WS_VSCROLL,
+             x, 500, w, 100, kFeaturePrompt),
+        makeLabel(L"{source}, {target}, {style} follow your options. Input text is added automatically.", x, 610, w, -1),
+        make(L"BUTTON", L"Restore default prompt", WS_TABSTOP | BS_PUSHBUTTON, x, 650, 188, 32, kFeaturePromptReset),
+        make(L"BUTTON", L"Cancel", WS_TABSTOP | BS_PUSHBUTTON, x + 360, 650, 90, 32, kFeatureCancel),
+        make(L"BUTTON", L"Save", WS_TABSTOP | BS_PUSHBUTTON, x + 466, 650, 94, 32, kFeatureSave),
+    });
+    SendMessageW(ctrl(kFeaturePrompt), EM_SETLIMITTEXT, 8000, 0);
+    for (auto label : {L"Shortcut only", L"Show floating icon", L"Auto-translate selection"})
+        SendMessageW(ctrl(kFeatureTrigger), CB_ADDSTRING, 0, (LPARAM)label);
 
     // --- 5 Skip Apps ---
     y = 82;
@@ -580,16 +516,6 @@ void buildPages() {
     };
     g.pages[7].insert(g.pages[7].end(), controls.begin(), controls.end());
     }
-    auto moveControl = [&](int id, int page, int top) {
-        HWND c = ctrl(id);
-        RECT r{}; GetWindowRect(c, &r); MapWindowPoints(nullptr, g.hwnd, (POINT*)&r, 2);
-        SetWindowPos(c, nullptr, r.left, px(top), r.right - r.left, r.bottom - r.top, SWP_NOZORDER);
-        g.pages[page].push_back(c);
-    };
-    moveControl(kTriggerLabel, 3, 344); moveControl(kTrigger, 3, 340);
-    moveControl(kPreview, 3, 388);
-    moveControl(kReadStyleLabel, 2, 310); moveControl(kReadStyle, 2, 306);
-    moveControl(kRewriteStyleLabel, 2, 352); moveControl(kRewriteStyle, 2, 348);
     DestroyWindow(ctrl(kPageTitle4)); g.pages[4].clear();
     for (HWND c : g.pages[6]) {
         if (c == ctrl(kPageTitle6)) { DestroyWindow(c); continue; }
@@ -603,15 +529,82 @@ void buildPages() {
     SetWindowPos(ctrl(kAboutDesc), nullptr, px(x), px(y + 28), px(w), px(40), SWP_NOZORDER);
 }
 
+void featureHints() {
+    const auto& s = Settings::shared();
+    const auto& c = g.featureDraft;
+    std::wstring language = s.languageLabel(c.source, true) + L" → " + s.languageLabel(c.target);
+    if (c.target == kLanguageAuto) language += g.selectedFeature == Feature::Selection
+        ? L". Uncertain text goes to your native language."
+        : L". Uncertain text goes to your foreign language.";
+    SetWindowTextW(ctrl(kFeatureLanguageHint), language.c_str());
+    SetWindowTextW(ctrl(kFeatureRoute), s.providerSummary(c).c_str());
+}
+void openFeatureEditor(Feature feature) {
+    g.selectedFeature = feature;
+    const auto& s = Settings::shared();
+    g.featureDraft = s.feature(feature); g.featureHotkey = s.shortcut(feature);
+    g.loading = true;
+    SetWindowTextW(ctrl(kPageTitle3), FeatureName(feature));
+    SendMessageW(ctrl(kFeatureHotkey), HKM_SETHOTKEY, hotkeyToControl(g.featureHotkey), 0);
+    CheckDlgButton(g.hwnd, kFeatureWin, g.featureHotkey.modifiers & MOD_WIN ? BST_CHECKED : BST_UNCHECKED);
+    SetWindowTextW(ctrl(kFeatureStatus), App::shared().shortcutStatus(feature).c_str());
+    featureui::languages(ctrl(kFeatureSource), g.featureDraft.source, true);
+    featureui::languages(ctrl(kFeatureTarget), g.featureDraft.target, false);
+    featureui::providers(ctrl(kFeatureProvider), g.featureDraft);
+    fillStyleCombo(ctrl(kFeatureStyle), g.featureDraft.style);
+    SetWindowTextW(ctrl(kFeaturePrompt), util::Widen(g.featureDraft.prompt.empty()
+        ? translator::DefaultPromptTemplate() : g.featureDraft.prompt).c_str());
+    SendMessageW(ctrl(kFeatureTrigger), CB_SETCURSEL, (int)s.selectionTrigger, 0);
+    CheckDlgButton(g.hwnd, kFeaturePreview, s.rewritePreview ? BST_CHECKED : BST_UNCHECKED);
+    featureHints();
+    g.loading = false; g.featureDirty = false;
+    showPage(3);
+    SetFocus(ctrl(kFeatureHotkey));
+}
+bool leaveFeatureEditor() {
+    if (g.currentPage != 3 || !g.featureDirty) return true;
+    return MessageBoxW(g.hwnd, L"Discard the unsaved changes to this feature?", L"TypeTide-Win",
+                       MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
+}
+
+void scrollPage(int position) {
+    const int delta = g.scrollY - position;
+    for (auto control : g.pages[g.currentPage]) {
+        RECT r{}; GetWindowRect(control, &r); MapWindowPoints(nullptr, g.hwnd, (POINT*)&r, 2);
+        SetWindowPos(control, nullptr, r.left, r.top + delta, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    g.scrollY = position;
+    SetScrollPos(g.hwnd, SB_VERT, position, TRUE);
+    InvalidateRect(g.hwnd, nullptr, TRUE);
+}
+void updateScroll() {
+    if (g.pages.empty()) return;
+    const int heights[] = {670, 510, 640, 710, 0, 540, 0, 530};
+    RECT r{}; GetClientRect(g.hwnd, &r);
+    SCROLLINFO info{sizeof(info), SIF_RANGE | SIF_PAGE | SIF_POS};
+    info.nMax = px(heights[g.currentPage]); info.nPage = r.bottom;
+    const int position = std::clamp(g.scrollY, 0, std::max(0, info.nMax - (int)info.nPage + 1));
+    if (position != g.scrollY) scrollPage(position);
+    info.nPos = position; SetScrollInfo(g.hwnd, SB_VERT, &info, TRUE);
+}
+
 void showPage(int index) {
+    if (g.scrollY) scrollPage(0);
     g.currentPage = index;
     for (int p = 0; p < (int)g.pages.size(); ++p)
         for (HWND c : g.pages[p])
             ShowWindow(c, p == index ? SW_SHOW : SW_HIDE);
+    if (index == 2) SettingsWindow::refreshFeatures();
+    if (index == 3) {
+        ShowWindow(ctrl(kFeatureTrigger), g.selectedFeature == Feature::Selection ? SW_SHOW : SW_HIDE);
+        ShowWindow(ctrl(kFeatureBehaviorLabel), g.selectedFeature == Feature::Selection ? SW_SHOW : SW_HIDE);
+        ShowWindow(ctrl(kFeaturePreview), g.selectedFeature == Feature::Rewrite ? SW_SHOW : SW_HIDE);
+    }
     if (index == 1) {
         for (auto c : g.providerListControls) ShowWindow(c, g.providerEditing ? SW_HIDE : SW_SHOW);
         for (auto c : g.providerEditorControls) ShowWindow(c, g.providerEditing ? SW_SHOW : SW_HIDE);
     }
+    updateScroll();
 }
 
 void layoutForClientSize(int width, int height) {
@@ -673,13 +666,16 @@ void onCommand(int id, int code) {
         g.dark = s.useDarkMode();
         applyTheme(g.hwnd);
         PopupWindow::shared().refreshTheme();
+        InputWindow::refreshTheme();
         break;
     case kTab:
         if (code == LBN_SELCHANGE)
         {
-            const int pages[] = {0, 1, 2, 3, 5, 7};
+            const int pages[] = {0, 1, 2, 5, 7};
             const int selected = (int)SendMessageW(ctrl(kTab), LB_GETCURSEL, 0, 0);
-            if (selected >= 0 && selected < 6) showPage(pages[selected]);
+            if (!leaveFeatureEditor()) { SendMessageW(ctrl(kTab), LB_SETCURSEL, 2, 0); return; }
+            g.featureDirty = false;
+            if (selected >= 0 && selected < 5) showPage(pages[selected]);
         }
         return;
     case kEnable:
@@ -768,176 +764,69 @@ void onCommand(int id, int code) {
         return;
     }
 
-    case kNative:
+    case kNative: case kForeign:
         if (code != CBN_SELCHANGE) return;
-        s.nativeLanguage = comboLanguage(ctrl(kNative));
-        fillDirectionCombo(ctrl(kReadDir), s.readDirection);
-        fillDirectionCombo(ctrl(kRewriteDir), s.rewriteDirection);
-        updateLangWarn();
-        break;
-    case kForeign:
+        s.nativeLanguage = comboLanguage(ctrl(kNative)); s.foreignLanguage = comboLanguage(ctrl(kForeign));
+        updateLangWarn(); break;
+    case kFeature0: case kFeature1: case kFeature2:
+        openFeatureEditor((Feature)(id - kFeature0)); return;
+    case kFeatureBack: case kFeatureCancel:
+        if (leaveFeatureEditor()) { g.featureDirty = false; showPage(2); SetFocus(ctrl(kFeature0 + (int)g.selectedFeature)); }
+        return;
+    case kFeatureClear:
+        g.loading = true;
+        SendMessageW(ctrl(kFeatureHotkey), HKM_SETHOTKEY, 0, 0);
+        CheckDlgButton(g.hwnd, kFeatureWin, BST_UNCHECKED);
+        g.loading = false;
+        g.featureHotkey = {0, 0}; g.featureDirty = true; return;
+    case kFeatureHotkey: case kFeatureWin:
+        if (id == kFeatureHotkey && code != EN_CHANGE) return;
+        g.featureHotkey = hotkeyFromControl((WORD)SendMessageW(ctrl(kFeatureHotkey), HKM_GETHOTKEY, 0, 0));
+        if (g.featureHotkey.isConfigured() && IsDlgButtonChecked(g.hwnd, kFeatureWin) == BST_CHECKED)
+            g.featureHotkey.modifiers |= MOD_WIN;
+        SetWindowTextW(ctrl(kFeatureStatus), L"Availability will be checked when saved.");
+        g.featureDirty = true; return;
+    case kFeatureSource: case kFeatureTarget: case kFeatureProvider: case kFeatureStyle:
         if (code != CBN_SELCHANGE) return;
-        s.foreignLanguage = comboLanguage(ctrl(kForeign));
-        fillDirectionCombo(ctrl(kReadDir), s.readDirection);
-        fillDirectionCombo(ctrl(kRewriteDir), s.rewriteDirection);
-        updateLangWarn();
-        break;
-    case kReadDir:
-        if (code != CBN_SELCHANGE) return;
-        s.readDirection = (TranslationDirection)SendMessageW(ctrl(kReadDir), CB_GETCURSEL, 0, 0);
-        break;
-    case kRewriteDir:
-        if (code != CBN_SELCHANGE) return;
-        s.rewriteDirection = (TranslationDirection)SendMessageW(ctrl(kRewriteDir), CB_GETCURSEL, 0, 0);
-        break;
-
-    case kHkRead:
-        if (code != EN_CHANGE) return;
-        {
-            Hotkey hk = hotkeyFromControl((WORD)SendMessageW(ctrl(kHkRead), HKM_GETHOTKEY, 0, 0));
-            if (hk.vk == 0) {
-                s.readShortcut = {0, 0};
-                CheckDlgButton(g.hwnd, kReadWin, BST_UNCHECKED);
-                updateShortcutControls();
-                reapply = true;
-                break;
-            }
-            if (IsDlgButtonChecked(g.hwnd, kReadWin) == BST_CHECKED) hk.modifiers |= MOD_WIN;
-            if (s.rewriteShortcut.isConfigured() && hk == s.rewriteShortcut) {
-                MessageBoxW(g.hwnd, L"Translate and rewrite must use different shortcuts.",
-                            L"TypeTide-Win — duplicate shortcut", MB_OK | MB_ICONWARNING);
-                SendMessageW(ctrl(kHkRead), HKM_SETHOTKEY, hotkeyToControl(s.readShortcut), 0);
-                return;
-            }
-            s.readShortcut = hk;
-            updateShortcutControls();
-            reapply = true;
+        g.featureDraft.source = featureui::value(ctrl(kFeatureSource));
+        g.featureDraft.target = featureui::value(ctrl(kFeatureTarget));
+        g.featureDraft.style = comboStyle(ctrl(kFeatureStyle));
+        if (id == kFeatureProvider) {
+            const int index = featureui::value(ctrl(kFeatureProvider));
+            const auto list = s.effectiveProviders();
+            if (index >= 0 && index < (int)list.size()) g.featureDraft.providerId = list[index].id;
+            else if (index == -1) g.featureDraft.providerId.clear();
         }
-        break;
-    case kHkRewrite:
-        if (code != EN_CHANGE) return;
-        {
-            Hotkey hk = hotkeyFromControl((WORD)SendMessageW(ctrl(kHkRewrite), HKM_GETHOTKEY, 0, 0));
-            if (hk.vk == 0) {
-                s.rewriteShortcut = {0, 0};
-                CheckDlgButton(g.hwnd, kRewriteWin, BST_UNCHECKED);
-                updateShortcutControls();
-                reapply = true;
-                break;
+        featureHints(); g.featureDirty = true; return;
+    case kFeaturePromptReset:
+        SetWindowTextW(ctrl(kFeaturePrompt), util::Widen(translator::DefaultPromptTemplate()).c_str());
+        g.featureDirty = true; return;
+    case kFeaturePrompt:
+        if (code == EN_CHANGE) g.featureDirty = true;
+        return;
+    case kFeatureTrigger: case kFeaturePreview:
+        g.featureDirty = true; return;
+    case kFeatureSave: {
+        for (int i = 0; i < 3; ++i) {
+            if ((Feature)i != g.selectedFeature && g.featureHotkey.isConfigured() && g.featureHotkey == s.shortcut((Feature)i)) {
+                SetWindowTextW(ctrl(kFeatureStatus), (L"Already used by " + std::wstring(FeatureName((Feature)i))).c_str());
+                SetFocus(ctrl(kFeatureHotkey)); return;
             }
-            if (IsDlgButtonChecked(g.hwnd, kRewriteWin) == BST_CHECKED) hk.modifiers |= MOD_WIN;
-            if (s.readShortcut.isConfigured() && hk == s.readShortcut) {
-                MessageBoxW(g.hwnd, L"Translate and rewrite must use different shortcuts.",
-                            L"TypeTide-Win — duplicate shortcut", MB_OK | MB_ICONWARNING);
-                SendMessageW(ctrl(kHkRewrite), HKM_SETHOTKEY, hotkeyToControl(s.rewriteShortcut), 0);
-                return;
-            }
-            s.rewriteShortcut = hk;
-            updateShortcutControls();
-            reapply = true;
         }
-        break;
-    case kReadWin:
-        if (!s.readShortcut.isConfigured()) {
-            CheckDlgButton(g.hwnd, kReadWin, BST_UNCHECKED);
+        g.featureDraft.prompt = util::Narrow(util::Trim(featureui::text(ctrl(kFeaturePrompt))));
+        if (g.featureDraft.prompt == translator::DefaultPromptTemplate()) g.featureDraft.prompt.clear();
+        const Settings previous = s;
+        s.feature(g.selectedFeature) = g.featureDraft;
+        s.shortcut(g.selectedFeature) = g.featureHotkey;
+        if (g.selectedFeature == Feature::Selection) s.selectionTrigger = (SelectionTrigger)SendMessageW(ctrl(kFeatureTrigger), CB_GETCURSEL, 0, 0);
+        if (g.selectedFeature == Feature::Rewrite) s.rewritePreview = IsDlgButtonChecked(g.hwnd, kFeaturePreview) == BST_CHECKED;
+        if (!s.save()) {
+            s = previous;
+            MessageBoxW(g.hwnd, L"Could not save the feature settings. Your previous settings were kept.", L"TypeTide-Win", MB_OK | MB_ICONERROR);
             return;
         }
-        if (IsDlgButtonChecked(g.hwnd, kReadWin) == BST_CHECKED) s.readShortcut.modifiers |= MOD_WIN;
-        else s.readShortcut.modifiers &= ~MOD_WIN;
-        if (s.rewriteShortcut.isConfigured() && s.readShortcut == s.rewriteShortcut) {
-            MessageBoxW(g.hwnd, L"Translate and rewrite must use different shortcuts.",
-                        L"TypeTide-Win — duplicate shortcut", MB_OK | MB_ICONWARNING);
-            s.readShortcut.modifiers ^= MOD_WIN;
-            CheckDlgButton(g.hwnd, kReadWin,
-                           s.readShortcut.modifiers & MOD_WIN ? BST_CHECKED : BST_UNCHECKED);
-            return;
-        }
-        reapply = true;
-        break;
-    case kRewriteWin:
-        if (!s.rewriteShortcut.isConfigured()) {
-            CheckDlgButton(g.hwnd, kRewriteWin, BST_UNCHECKED);
-            return;
-        }
-        if (IsDlgButtonChecked(g.hwnd, kRewriteWin) == BST_CHECKED) s.rewriteShortcut.modifiers |= MOD_WIN;
-        else s.rewriteShortcut.modifiers &= ~MOD_WIN;
-        if (s.readShortcut.isConfigured() && s.readShortcut == s.rewriteShortcut) {
-            MessageBoxW(g.hwnd, L"Translate and rewrite must use different shortcuts.",
-                        L"TypeTide-Win — duplicate shortcut", MB_OK | MB_ICONWARNING);
-            s.rewriteShortcut.modifiers ^= MOD_WIN;
-            CheckDlgButton(g.hwnd, kRewriteWin,
-                           s.rewriteShortcut.modifiers & MOD_WIN ? BST_CHECKED : BST_UNCHECKED);
-            return;
-        }
-        reapply = true;
-        break;
-    case kHkReadClear:
-        s.readShortcut = {0, 0};
-        SendMessageW(ctrl(kHkRead), HKM_SETHOTKEY, 0, 0);
-        CheckDlgButton(g.hwnd, kReadWin, BST_UNCHECKED);
-        updateShortcutControls();
-        reapply = true;
-        break;
-    case kHkRewriteClear:
-        s.rewriteShortcut = {0, 0};
-        SendMessageW(ctrl(kHkRewrite), HKM_SETHOTKEY, 0, 0);
-        CheckDlgButton(g.hwnd, kRewriteWin, BST_UNCHECKED);
-        updateShortcutControls();
-        reapply = true;
-        break;
-    case kReadAction:
-        if (code != CBN_SELCHANGE) return;
-        s.readShortcutAction = (ShortcutAction)SendMessageW(ctrl(kReadAction), CB_GETCURSEL, 0, 0);
-        break;
-    case kRewriteAction:
-        if (code != CBN_SELCHANGE) return;
-        s.rewriteShortcutAction = (ShortcutAction)SendMessageW(ctrl(kRewriteAction), CB_GETCURSEL, 0, 0);
-        break;
-    case kHkRestoreDefaults:
-        s.readShortcut = {MOD_ALT, 'D'};
-        s.rewriteShortcut = {MOD_ALT, 'R'};
-        s.readShortcutAction = ShortcutAction::SmartPopup;
-        s.rewriteShortcutAction = ShortcutAction::SmartReplace;
-        SendMessageW(ctrl(kHkRead), HKM_SETHOTKEY, hotkeyToControl(s.readShortcut), 0);
-        SendMessageW(ctrl(kHkRewrite), HKM_SETHOTKEY, hotkeyToControl(s.rewriteShortcut), 0);
-        CheckDlgButton(g.hwnd, kReadWin, BST_UNCHECKED);
-        CheckDlgButton(g.hwnd, kRewriteWin, BST_UNCHECKED);
-        fillShortcutActionCombo(ctrl(kReadAction), s.readShortcutAction);
-        fillShortcutActionCombo(ctrl(kRewriteAction), s.rewriteShortcutAction);
-        updateShortcutControls();
-        reapply = true;
-        break;
-    case kHkVerify:
-        applyToApp();
-        g.shortcutsReady = App::shared().shortcutsRegistered();
-        updateFirstRunCompletion();
-        MessageBoxW(g.hwnd,
-                    g.shortcutsReady ? L"Every configured shortcut is registered and ready."
-                                     : (!s.readShortcut.isConfigured() && !s.rewriteShortcut.isConfigured()
-                                        ? L"Set at least one shortcut so TypeTide-Win can be triggered from the keyboard."
-                                        : L"One or more shortcuts are unavailable. Choose a different combination."),
-                    L"TypeTide-Win — shortcut verification",
-                    MB_OK | (g.shortcutsReady ? MB_ICONINFORMATION : MB_ICONWARNING));
-        save = false;
-        break;
-
-    case kTrigger:
-        if (code != CBN_SELCHANGE) return;
-        s.selectionTrigger = (SelectionTrigger)SendMessageW(ctrl(kTrigger), CB_GETCURSEL, 0, 0);
-        reapply = true;
-        break;
-    case kPreview:
-        s.rewritePreview = IsDlgButtonChecked(g.hwnd, kPreview) == BST_CHECKED;
-        break;
-    case kReadStyle:
-        if (code != CBN_SELCHANGE) return;
-        s.readStyle = comboStyle(ctrl(kReadStyle));
-        break;
-    case kRewriteStyle:
-        if (code != CBN_SELCHANGE) return;
-        s.rewriteStyle = comboStyle(ctrl(kRewriteStyle));
-        break;
-
+        g.featureDirty = false; applyToApp(); showPage(2); SetFocus(ctrl(kFeature0 + (int)g.selectedFeature)); return;
+    }
     case kSkipAdd: {
         std::wstring app = util::Trim(editText(ctrl(kSkipEdit)));
         if (app.empty()) { save = false; break; }
@@ -1008,9 +897,29 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_SIZE:
-        if (wp != SIZE_MINIMIZED)
+        if (wp != SIZE_MINIMIZED) {
             layoutForClientSize(LOWORD(lp), HIWORD(lp));
+            updateScroll();
+        }
         return 0;
+    case WM_VSCROLL: {
+        SCROLLINFO info{sizeof(info), SIF_ALL}; GetScrollInfo(hwnd, SB_VERT, &info);
+        int position = g.scrollY;
+        switch (LOWORD(wp)) {
+        case SB_LINEUP: position -= px(32); break;
+        case SB_LINEDOWN: position += px(32); break;
+        case SB_PAGEUP: position -= info.nPage; break;
+        case SB_PAGEDOWN: position += info.nPage; break;
+        case SB_THUMBTRACK: position = info.nTrackPos; break;
+        default: return 0;
+        }
+        scrollPage(std::clamp(position, 0, std::max(0, info.nMax - (int)info.nPage + 1))); return 0;
+    }
+    case WM_MOUSEWHEEL: {
+        SCROLLINFO info{sizeof(info), SIF_ALL}; GetScrollInfo(hwnd, SB_VERT, &info);
+        scrollPage(std::clamp(g.scrollY - (int)(short)HIWORD(wp) * px(48) / WHEEL_DELTA,
+                             0, std::max(0, info.nMax - (int)info.nPage + 1))); return 0;
+    }
     case WM_COMMAND:
         onCommand(LOWORD(wp), HIWORD(wp));
         return 0;
@@ -1067,6 +976,36 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_DRAWITEM: {
         auto* item = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
+        if (item->CtlID >= kFeature0 && item->CtlID <= kFeature2) {
+            const auto feature = (Feature)(item->CtlID - kFeature0);
+            const auto& s = Settings::shared(); const auto& c = s.feature(feature);
+            const auto p = ui::palette(g.dark, g.highContrast);
+            const auto oldFont = SelectObject(item->hDC, g.fontBold);
+            const auto brush = CreateSolidBrush(p.surface); const auto border = CreatePen(PS_SOLID, 1, p.divider);
+            const auto oldBrush = SelectObject(item->hDC, brush), oldPen = SelectObject(item->hDC, border);
+            const RECT r = item->rcItem;
+            RoundRect(item->hDC, r.left, r.top, r.right, r.bottom, px(12), px(12));
+            SetBkMode(item->hDC, TRANSPARENT); SetTextColor(item->hDC, p.text);
+            RECT text{r.left + px(18), r.top + px(12), r.right - px(24), r.top + px(38)};
+            DrawTextW(item->hDC, FeatureName(feature), -1, &text, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            SelectObject(item->hDC, g.font); SetTextColor(item->hDC, p.secondary);
+            const wchar_t* behavior = feature == Feature::Input ? L"Type & copy  ›" : feature == Feature::Rewrite
+                ? (s.rewritePreview ? L"Preview first  ›" : L"Direct replacement  ›")
+                : s.selectionTrigger == SelectionTrigger::Icon ? L"Floating icon  ›"
+                : s.selectionTrigger == SelectionTrigger::Auto ? L"Auto-translate  ›" : L"Shortcut only  ›";
+            RECT hint{r.right - px(190), r.top + px(14), r.right - px(18), r.top + px(36)};
+            DrawTextW(item->hDC, behavior, -1, &hint, DT_SINGLELINE | DT_RIGHT | DT_NOPREFIX);
+            text.top = r.top + px(46); text.bottom = text.top + px(22);
+            const auto line = s.shortcut(feature).displayString() + L" · " + App::shared().shortcutStatus(feature) +
+                L"   |   " + s.languageLabel(c.source, true) + L" → " + s.languageLabel(c.target);
+            DrawTextW(item->hDC, line.c_str(), -1, &text, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            text.top += px(26); text.bottom += px(26);
+            const auto route = s.providerSummary(c);
+            DrawTextW(item->hDC, route.c_str(), -1, &text, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            if (item->itemState & ODS_FOCUS) { RECT focus = r; InflateRect(&focus, -px(4), -px(4)); DrawFocusRect(item->hDC, &focus); }
+            SelectObject(item->hDC, oldBrush); SelectObject(item->hDC, oldPen); SelectObject(item->hDC, oldFont);
+            DeleteObject(brush); DeleteObject(border); return TRUE;
+        }
         if (item->CtlID == kProviderList && item->itemID != (UINT)-1) {
             const auto& providers = Settings::shared().providers;
             if (item->itemID >= providers.size()) return TRUE;
@@ -1115,7 +1054,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT tr = item->rcItem;
         RECT iconRect{item->rcItem.left + px(17), item->rcItem.top + px(11),
                       item->rcItem.left + px(37), item->rcItem.top + px(31)};
-        vectoricons::DrawNavigation(item->hDC, iconRect, (item->itemID == 4 ? 5 : item->itemID == 5 ? 7 : static_cast<int>(item->itemID)),
+        vectoricons::DrawNavigation(item->hDC, iconRect, (item->itemID == 3 ? 5 : item->itemID == 4 ? 7 : static_cast<int>(item->itemID)),
                                    selected ? (g.highContrast ? GetSysColor(COLOR_HIGHLIGHTTEXT) : ui::accent(g.dark)) : secondaryColor());
         tr.left += px(49);
         DrawTextW(item->hDC, text, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
@@ -1165,6 +1104,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         applyTheme(hwnd);
         return 0;
     case WM_CLOSE:
+        if (!leaveFeatureEditor()) return 0;
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
@@ -1182,7 +1122,40 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 namespace SettingsWindow {
 
-bool processMessage(MSG* message) { return g.hwnd && IsDialogMessageW(g.hwnd, message); }
+void refreshFeatures() {
+    if (!g.hwnd) return;
+    g.shortcutsReady = App::shared().shortcutsRegistered();
+    updateFirstRunCompletion();
+    for (int i = 0; i < 3; ++i) InvalidateRect(ctrl(kFeature0 + i), nullptr, TRUE);
+    const auto& s = Settings::shared();
+    std::wstring notice = L"Choose a feature to edit its shortcut, languages, provider and prompt.\nChanges in a feature are applied when you save.";
+    if (!s.featureMigrationNotice.empty()) notice += L"\n\n" + util::Widen(s.featureMigrationNotice);
+    SetWindowTextW(ctrl(kFeatureNotice), notice.c_str());
+}
+void openFeature(HWND appWindow, int feature) {
+    open(appWindow);
+    if (!g.hwnd || feature < 0 || feature > 2 || !leaveFeatureEditor()) return;
+    SendMessageW(ctrl(kTab), LB_SETCURSEL, 2, 0); openFeatureEditor((Feature)feature);
+}
+
+bool recordingShortcut() { return g.hwnd && g.currentPage == 3 && GetFocus() == ctrl(kFeatureHotkey); }
+bool processMessage(MSG* message) {
+    if (!g.hwnd) return false;
+    const bool handled = IsDialogMessageW(g.hwnd, message) != FALSE;
+    if (handled && message->message == WM_KEYDOWN && message->wParam == VK_TAB) {
+        HWND focused = GetFocus();
+        if (focused && focused != ctrl(kTab) && IsChild(g.hwnd, focused)) {
+            RECT r{}, client{}; GetWindowRect(focused, &r); MapWindowPoints(nullptr, g.hwnd, (POINT*)&r, 2);
+            GetClientRect(g.hwnd, &client);
+            int next = g.scrollY;
+            if (r.top < px(12)) next += r.top - px(12);
+            if (r.bottom > client.bottom - px(12)) next += r.bottom - client.bottom + px(12);
+            SCROLLINFO info{sizeof(info), SIF_ALL}; GetScrollInfo(g.hwnd, SB_VERT, &info);
+            if (next != g.scrollY) scrollPage(std::clamp(next, 0, std::max(0, info.nMax - (int)info.nPage + 1)));
+        }
+    }
+    return handled;
+}
 
 void open(HWND appWindow) {
     if (g.hwnd) {
@@ -1212,7 +1185,9 @@ void open(HWND appWindow) {
     (void)registered;
 
     g.dpi = GetDpiForSystem();
-    int w = px(820), h = px(560);
+    RECT work{}; SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    int w = px(820), h = std::max(px(560), std::min(px(720), (int)(work.bottom - work.top) - px(64)));
+    g.scrollY = 0;
     RECT wr{0, 0, w, h};
     AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
 
@@ -1256,9 +1231,9 @@ void open(HWND appWindow) {
                                (HMENU)kTab, GetModuleHandleW(nullptr), nullptr);
     SendMessageW(tab, WM_SETFONT, (WPARAM)g.font, TRUE);
     SendMessageW(tab, LB_SETITEMHEIGHT, 0, px(42));
-    const wchar_t* names[] = {L"General", L"Providers", L"Translation", L"Shortcuts & triggers",
+    const wchar_t* names[] = {L"General", L"Providers", L"Features",
                               L"Excluded apps", L"About & diagnostics"};
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 5; ++i) {
         SendMessageW(tab, LB_ADDSTRING, 0, (LPARAM)names[i]);
     }
     SendMessageW(tab, LB_SETCURSEL, 0, 0);

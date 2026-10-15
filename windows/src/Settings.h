@@ -7,6 +7,7 @@
 #include "Language.h"
 #include <string>
 #include <vector>
+#include <array>
 
 enum class TranslationBackend { Ollama, OpenAI, Anthropic, Gemini };
 struct ProviderConfig {
@@ -19,6 +20,7 @@ struct ProviderConfig {
 };
 const char* ProviderKindCode(TranslationBackend kind);
 ProviderConfig NewProvider(TranslationBackend kind);
+bool ProviderIsLocal(const ProviderConfig& provider);
 enum class Appearance { System, Light, Dark };
 
 /// 划词触发方式
@@ -46,6 +48,22 @@ struct Hotkey {
     bool isConfigured() const { return vk != 0; }
     bool operator==(const Hotkey&) const = default;
 };
+
+enum class Feature { Selection, Rewrite, Input };
+// Negative values follow shared preferences; nonnegative values are Language.
+constexpr int kLanguageAuto = -1;
+constexpr int kLanguageNative = -2;
+constexpr int kLanguageForeign = -3;
+constexpr int kLanguageSame = -4;
+struct FeatureConfig {
+    int source = kLanguageAuto;
+    int target = kLanguageAuto;
+    RewriteStyle style = RewriteStyle::Faithful;
+    std::string providerId; // empty = default ordered provider chain
+    std::string prompt;     // empty = built-in template
+    bool operator==(const FeatureConfig&) const = default;
+};
+const wchar_t* FeatureName(Feature feature);
 
 struct Settings {
     bool enabled = true;
@@ -78,6 +96,20 @@ struct Settings {
     // 快捷键
     Hotkey readShortcut{MOD_ALT, 'D'};
     Hotkey rewriteShortcut{MOD_ALT, 'R'};
+    Hotkey inputShortcut{MOD_ALT, 'Q'};
+    std::array<FeatureConfig, 3> features{{{}, {}, {kLanguageNative, kLanguageForeign}}};
+    std::string featureMigrationNotice;
+    FeatureConfig& feature(Feature f) { return features[static_cast<size_t>(f)]; }
+    const FeatureConfig& feature(Feature f) const { return features[static_cast<size_t>(f)]; }
+    Hotkey& shortcut(Feature f);
+    const Hotkey& shortcut(Feature f) const;
+    std::vector<ProviderConfig> providersFor(const FeatureConfig& config) const;
+    bool providerMissing(const FeatureConfig& config) const;
+    std::wstring providerSummary(const FeatureConfig& config) const;
+    std::wstring languageLabel(int value, bool source = false) const;
+    ResolvedDirection resolveFeature(const std::wstring& text, Feature f,
+                                           const FeatureConfig& config) const;
+    void migrateFeatures();
     ShortcutAction readShortcutAction = ShortcutAction::SmartPopup;
     ShortcutAction rewriteShortcutAction = ShortcutAction::SmartReplace;
 

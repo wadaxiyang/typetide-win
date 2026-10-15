@@ -7,6 +7,7 @@
 #include "Language.h"
 #include "SelectionCapture.h"
 #include "TrayIcon.h"
+#include "Settings.h"
 #include <optional>
 #include <string>
 
@@ -36,6 +37,8 @@ public:
     /// 根据开关 + 快捷键 + 划词设置重新装配触发（设置变化后调用）
     void applyEnabledState();
     void openSettings();
+    std::wstring shortcutStatus(Feature feature) const;
+    void openInput();
 
 private:
     App() = default;
@@ -61,14 +64,12 @@ private:
         Language to;
     };
 
-    void performShortcutAction(ShortcutAction action);
     void handleRead(std::optional<Language> targetOverride = std::nullopt);
     void handleRewrite(std::optional<Language> targetOverride = std::nullopt);
     void presentRead(const capture::Capture& cap, std::optional<Language> targetOverride = std::nullopt);
     void proceedRewrite(const capture::Capture& cap, std::optional<Language> targetOverride = std::nullopt);
     /// 超长输入直接弹错误提示（LLM 又慢又贵，弹窗也放不下）；返回 true = 已拦截
     bool rejectIfTooLong(const capture::Capture& cap);
-    Direction resolveDirection(const std::wstring& text, TranslationDirection mode, bool isWrite) const;
     void startStream(const std::wstring& text, std::optional<Language> from, Language to, RewriteStyle style);
     void setupSelectionTrigger();
     bool foregroundAppSkipped() const;
@@ -78,13 +79,16 @@ private:
     HWND hwnd_ = nullptr;
     TrayIcon tray_;
     uint64_t currentReq_ = 0;
+    uint64_t rewriteReq_ = 0;
     std::optional<Language> currentSource_;   // 弹窗重定向语言时沿用
     std::wstring currentText_;
+    Feature currentFeature_ = Feature::Selection;
+    FeatureConfig currentConfig_;
     RewriteStyle currentStyle_ = RewriteStyle::Faithful;
     bool currentReplaceSelectAll_ = false;    // 弹窗 Replace 时是否先全选
-    bool hotkeyWarningShown_ = false;
     bool readShortcutRegistered_ = false;
     bool rewriteShortcutRegistered_ = false;
+    bool inputShortcutRegistered_ = false;
     bool shortcutsReady_ = false;
     UINT taskbarCreatedMsg_ = 0;   // explorer 重启后重挂托盘图标
 };

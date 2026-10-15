@@ -8,7 +8,8 @@ UI Automation and a built-in JSON parser, with no third-party runtime dependenci
 
 ## Features and configuration
 
-Translate selected text with Alt+D, rewrite in place with Alt+R, or enable the
+Translate selected text with Alt+D, rewrite in place with Alt+R, open input translation
+with Alt+Q, or enable the
 floating selection icon and automatic translation. Results are collected behind a loading indicator, then shown in a native
 popup with Copy, Replace, and target-language controls. The app includes a system
 tray menu, launch at login, per-app exclusions, light/dark mode, and local diagnostics.
@@ -22,11 +23,19 @@ Order them with Move up/down; a failed attempt falls back to the next entry.
 API keys are stored separately in Windows Credential Manager, outside settings.json.
 A primary Ollama model is preloaded and kept warm for 10 minutes.
 
-The shortcut editor supports Ctrl, Shift, Alt, and the Windows key. Each of the
-two shortcuts independently chooses smart/native/foreign direction and popup or
-in-place replacement. Either shortcut can be cleared; keep at least one configured
-for keyboard triggering. Configure an installed Ollama model explicitly; managed
-provider entries are never silently changed by model discovery.
+The **Features** page has three fixed actions, each with its own shortcut, languages,
+provider, style and editable prompt. Shared native/foreign languages live in General.
+Input translation defaults to native → foreign; source detection and Keep original
+language are also available. Prompt placeholders are `{source}`, `{target}`, `{style}`.
+A missing provider falls back to the default order with its status shown in settings.
+Provider selection and routing details stay in settings. Feature edits use
+Save/Cancel and the cards report shortcut availability. Legacy bindings migrate;
+ambiguous action overrides retain their keys and show a migration notice.
+
+The input window accepts multi-line text, translates with Ctrl+Enter, swaps languages,
+and copies the result. Esc hides it and retains the draft in memory; loss of focus
+does not close it. The tray menu provides an alternative to Alt+Q. Configure installed
+Ollama models explicitly; managed providers are never silently rewritten.
 
 ## Build
 
@@ -122,7 +131,7 @@ otherwise a 2-second translation silently burns minutes on hidden reasoning.
   TextPattern — capture falls back to an invisible copy and the popup anchors
   at the cursor instead of the selection.
 - `RegisterHotKey` fails if another app owns the combo; TypeTide-Win warns once and
-  you can pick a different shortcut in Settings → Shortcuts.
+  you can pick a different shortcut in Settings → Features.
 
 ## UI regression checks
 

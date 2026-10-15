@@ -230,7 +230,7 @@ void PopupWindow::layoutAndResize() {
 
     int btnY = height - padY - btnH;
     int replaceW = showReplace_ ? px(84) : 0;
-    int copyW = px(70);
+    int copyW = px(32);
     if (!error_.empty() && onRetry) {
         rcCopy_ = rcReplace_ = RECT{};
         rcRetry_ = {width - padX - px(76), btnY, width - padX, btnY + btnH};
@@ -405,7 +405,21 @@ void PopupWindow::paint(HDC dc) {
         DrawTextW(dc, label, -1, (RECT*)&r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
     };
     if (!loading_ && !translation_.empty() && error_.empty()) {
-        drawButton(rcCopy_, copiedFlash_ ? L"Copied ✓" : L"Copy", false, hover_ == Region::Copy);
+        // Match the input window: a quiet SVG action, with a checkmark after copying.
+        if (hover_ == Region::Copy) {
+            HBRUSH brush = CreateSolidBrush(th.button);
+            HPEN pen = CreatePen(PS_SOLID, 1, th.buttonBorder);
+            auto oldBrush = SelectObject(dc, brush); auto oldPen = SelectObject(dc, pen);
+            RoundRect(dc, rcCopy_.left, rcCopy_.top, rcCopy_.right, rcCopy_.bottom, px(8), px(8));
+            SelectObject(dc, oldPen); SelectObject(dc, oldBrush);
+            DeleteObject(pen); DeleteObject(brush);
+        }
+        const int iconSize = px(18);
+        const int x = (rcCopy_.left + rcCopy_.right - iconSize) / 2;
+        const int y = (rcCopy_.top + rcCopy_.bottom - iconSize) / 2;
+        vectoricons::DrawAction(dc, {x, y, x + iconSize, y + iconSize},
+            copiedFlash_ ? vectoricons::Action::Check : vectoricons::Action::Copy,
+            copiedFlash_ ? ui::accent(dark_, highContrast_) : th.secondary);
         if (showReplace_) drawButton(rcReplace_, L"Replace", true, hover_ == Region::Replace);
     }
     if (!error_.empty() && onRetry)
@@ -526,8 +540,8 @@ LRESULT PopupWindow::handle(UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case Region::Copy:
             if (!translation_.empty()) {
-                clipboard::SetText(translation_);
-                copiedFlash_ = true;
+                copiedFlash_ = clipboard::SetText(translation_, false);
+                if (!copiedFlash_) MessageBeep(MB_ICONWARNING);
                 InvalidateRect(hwnd_, nullptr, FALSE);
                 SetTimer(hwnd_, kCopiedTimer, 1200, nullptr);
             }

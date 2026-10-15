@@ -98,10 +98,11 @@ ProviderConfig config(const Server& server, TranslationBackend kind, const char*
     p.model = "fixture-model"; p.apiKey = "synthetic-test-key"; return p;
 }
 struct Result { bool called = false, ok = false; std::wstring text, error; int deltas = 0; };
-Result translate(const std::vector<ProviderConfig>& providers, bool cache = false) {
+Result translate(const std::vector<ProviderConfig>& providers, bool cache = false,
+                 TranslationRequest request = {L"synthetic input"}) {
     struct State { std::mutex mutex; std::condition_variable cv; Result result; };
     auto state = std::make_shared<State>();
-    const auto id = translator::StreamWithProviders({L"synthetic input"}, providers,
+    const auto id = translator::StreamWithProviders(request, providers,
         [state](uint64_t, const std::wstring& delta) { std::lock_guard lock(state->mutex); state->result.text += delta; ++state->result.deltas; },
         [state](uint64_t, bool ok, const std::wstring& error) { std::lock_guard lock(state->mutex);
             state->result.called = true; state->result.ok = ok; state->result.error = error; state->cv.notify_all(); }, cache);
@@ -185,5 +186,98 @@ int main() {
     std::ofstream legacy(Settings::filePath()); legacy << R"({"backend":"openai","openAIBaseURL":"https://example.test/v1","openAIModel":"old-model","openAIKey":"legacy-fixture"})"; legacy.close();
     loaded.load(); loaded.ensureProviders();
     check(loaded.providers.size() == 1 && loaded.providers[0].kind == TranslationBackend::OpenAI && loaded.providers[0].model == "old-model" && loaded.providers[0].apiKey == "legacy-fixture", "legacy single-provider settings migrate without losing configuration");
+    auto locality = c;
+    locality.baseURL = "https://localhost/v1";
+    check(ProviderIsLocal(locality), "local provider disclosure recognizes HTTPS and path without explicit port");
+    locality.baseURL = "http://[::1]:11434";
+    check(ProviderIsLocal(locality), "local provider disclosure recognizes IPv6 loopback");
+    locality.baseURL = "http://localhost.example.test/v1";
+    check(!ProviderIsLocal(locality), "local-looking remote hostname is disclosed as network");
+    Settings features;
+    auto route = features.resolveFeature(L"你好", Feature::Input, features.feature(Feature::Input));
+    check(route.source == Language::Chinese && route.target == Language::English,
+          "input feature defaults to native-to-foreign");
+    features.foreignLanguage = Language::French;
+    route = features.resolveFeature(L"你好", Feature::Input, features.feature(Feature::Input));
+    check(route.target == Language::French, "input follows shared foreign-language preference");
+    auto& rewrite = features.feature(Feature::Rewrite);
+    rewrite.target = kLanguageSame; rewrite.style = RewriteStyle::Polished;
+    route = features.resolveFeature(L"This is an English sentence with the original language.", Feature::Rewrite, rewrite);
+    check(route.source == Language::English && route.target == Language::English,
+          "keep-original rewrites English without translating it");
+    TranslationRequest same{L"12345", std::nullopt, Language::Chinese, RewriteStyle::Polished, "", true};
+    check(translator::RenderPrompt(same).find("same language as the original text") != std::string::npos &&
+          translator::RenderPrompt(same).find("clarity and flow") != std::string::npos,
+          "undetectable source still instructs provider to preserve original language");
+    TranslationRequest custom{L"User input {target} stays literal", Language::Chinese, Language::English,
+        RewriteStyle::Formal, "Custom: {source} -> {target}.{style}"};
+    check(translator::RenderPrompt(custom) == "Custom: Chinese -> English. Use a professional, formal tone.",
+          "custom prompt renders source, target and style placeholders");
+    for (const auto& provider : {c, d, e, f}) {
+        provider::Request wire;
+        std::wstring wireError;
+        check(provider::BuildRequest(provider, custom, wire, wireError) &&
+              wire.body.find("Custom: Chinese -> English.") != std::string::npos &&
+              wire.body.find("User input {target} stays literal") != std::string::npos,
+              "all four provider protocols receive custom prompt and unchanged input");
+    }
+    TranslationRequest builtin{L"test", Language::Chinese, Language::English, RewriteStyle::Formal};
+    check(translator::RenderPrompt(builtin) == translator::SystemPrompt(builtin.target, builtin.source, builtin.style),
+          "built-in template preserves existing system prompt");
+    translator::ClearCacheForTesting();
+    const auto beforePrompts = server.requests().size();
+    check(translate({c}, true, custom).ok && translate({c}, true, custom).ok,
+          "custom prompt translations can use cache");
+    custom.prompt += " Extra instruction.";
+    check(translate({c}, true, custom).ok && server.requests().size() == beforePrompts + 2,
+          "changing the prompt invalidates cached translation");
+    custom.preserveLanguage = true;
+    check(translate({c}, true, custom).ok && server.requests().size() == beforePrompts + 3,
+          "keep-original and translation cannot share cached output");
+    features.providersConfigured = true; features.providers = {c, d};
+    rewrite.providerId = d.id;
+    check(features.providersFor(rewrite).size() == 1 && features.providersFor(rewrite)[0].id == d.id,
+          "explicit feature provider is isolated from the default fallback chain");
+    features.providers = {c};
+    check(features.providerMissing(rewrite) && features.providersFor(rewrite)[0].id == c.id &&
+          features.providerSummary(rewrite).find(L"removed") != std::wstring::npos,
+          "removed provider falls back to default with visible disclosure");
+    features.feature(Feature::Input).prompt = "Custom prompt {target}";
+    features.inputShortcut = {MOD_CONTROL | MOD_ALT, 'T'};
+    check(features.save(), "feature settings save");
+    Settings restored; restored.load();
+    check(restored.features == features.features && restored.inputShortcut == features.inputShortcut,
+          "all feature settings and input shortcut survive restart");
+    Settings migration;
+    migration.readShortcutAction = ShortcutAction::ForeignReplace;
+    migration.rewriteShortcutAction = ShortcutAction::NativePopup;
+    migration.migrateFeatures();
+    check(migration.readShortcut.vk == 'R' && migration.rewriteShortcut.vk == 'D' &&
+          migration.feature(Feature::Selection).target == kLanguageNative &&
+          migration.feature(Feature::Rewrite).target == kLanguageForeign,
+          "cross-bound legacy shortcuts move to the actions they previously performed");
+    Settings existingAltQ;
+    existingAltQ.readShortcut = {MOD_ALT, 'Q'};
+    existingAltQ.migrateFeatures();
+    check(existingAltQ.readShortcut.vk == 'Q' && !existingAltQ.inputShortcut.isConfigured() &&
+          existingAltQ.featureMigrationNotice.find("already used") != std::string::npos,
+          "new default Alt+Q cannot steal an existing custom shortcut during migration");
+    Settings duplicateAction;
+    duplicateAction.readShortcutAction = ShortcutAction::SmartReplace;
+    duplicateAction.migrateFeatures();
+    check(!duplicateAction.featureMigrationNotice.empty() && duplicateAction.readShortcut.vk == 'D',
+          "ambiguous legacy bindings retain keys and explain their normalized actions");
+    std::ofstream oldFeatures(Settings::filePath());
+    oldFeatures << R"({"readShortcut":{"modifiers":2,"vk":71},"rewriteDirection":"foreignToNative","readStyle":"formal","rewriteStyle":"polished"})";
+    oldFeatures.close();
+    Settings oldLoaded; oldLoaded.load();
+    check(oldLoaded.readShortcut.vk == 'G' && oldLoaded.feature(Feature::Selection).style == RewriteStyle::Formal &&
+          oldLoaded.feature(Feature::Rewrite).source == kLanguageForeign && oldLoaded.feature(Feature::Rewrite).target == kLanguageNative &&
+          oldLoaded.feature(Feature::Rewrite).style == RewriteStyle::Polished && oldLoaded.inputShortcut.vk == 'Q',
+          "legacy JSON migrates shortcuts, direction and styles; adds Alt+Q");
+    check(oldLoaded.save(), "migrated features persist");
+    Settings again; again.load();
+    check(again.features == oldLoaded.features && again.readShortcut == oldLoaded.readShortcut,
+          "feature migration is idempotent after saving");
     return failures ? 1 : 0;
 }

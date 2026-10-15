@@ -52,6 +52,11 @@ def main() -> None:
     output += 'inline void Navigation(Gdiplus::GraphicsPath& p, int index) {\n    switch (index) {\n'
     for index, symbol in enumerate(nav):
         output += f'    case {index}: // {symbol.attrib["id"]}\n' + geometry(symbol) + '\n        break;\n'
+    output += '    }\n}\n'
+    actions = ET.parse(ASSETS / 'actions.svg').getroot()
+    output += 'inline void Action(Gdiplus::GraphicsPath& p, int index) {\n    switch (index) {\n'
+    for index, symbol in enumerate(actions):
+        output += f'    case {index}: // {symbol.attrib["id"]}\n' + geometry(symbol) + '\n        break;\n'
     output += '    }\n}\n} // namespace svgpaths\n'
     (ROOT / 'windows/src/SvgPaths.generated.h').write_text(output, encoding='utf-8', newline='\n')
     (ROOT / 'docs/branding/typetide.svg').write_bytes((ASSETS / 'brand.svg').read_bytes())

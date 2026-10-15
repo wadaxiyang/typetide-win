@@ -18,9 +18,14 @@ struct TranslationRequest {
     std::optional<Language> source;  // nullopt = 让模型自动判断
     Language target = Language::English;
     RewriteStyle style = RewriteStyle::Faithful;
+    std::string prompt;
+    bool preserveLanguage = false;
 };
 
 namespace translator {
+
+const char* DefaultPromptTemplate();
+std::string RenderPrompt(const TranslationRequest& request);
 
 struct HealthCheckResult {
     bool ok = false;

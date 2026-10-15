@@ -47,5 +47,55 @@
       "required": ["from English into Spanish", "Improve clarity and flow"],
       "forbidden": []
     }
+  ],
+  "featureCases": [
+    {
+      "feature": "input",
+      "text": "你好，世界",
+      "sourceRule": -2,
+      "targetRule": -3,
+      "source": "zh",
+      "target": "en"
+    },
+    {
+      "feature": "input",
+      "text": "12345",
+      "sourceRule": -2,
+      "targetRule": -3,
+      "source": "zh",
+      "target": "en"
+    },
+    {
+      "feature": "rewrite",
+      "text": "This is a complete English sentence.",
+      "sourceRule": -1,
+      "targetRule": -4,
+      "source": "en",
+      "target": "en"
+    },
+    {
+      "feature": "selection",
+      "text": "12345 !!!",
+      "sourceRule": -1,
+      "targetRule": -1,
+      "source": null,
+      "target": "zh"
+    },
+    {
+      "feature": "rewrite",
+      "text": "12345 !!!",
+      "sourceRule": -1,
+      "targetRule": -1,
+      "source": null,
+      "target": "en"
+    },
+    {
+      "feature": "input",
+      "text": "你好",
+      "sourceRule": -1,
+      "targetRule": 3,
+      "source": "zh",
+      "target": "es"
+    }
   ]
 }

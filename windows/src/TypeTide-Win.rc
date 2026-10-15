@@ -5,8 +5,8 @@
 IDI_APPICON ICON "..\\assets\\app.ico"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,2,0,0
- PRODUCTVERSION 0,2,0,0
+ FILEVERSION 0,2,1,0
+ PRODUCTVERSION 0,2,1,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -19,12 +19,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "wadaxiyang"
             VALUE "FileDescription", "TypeTide-Win — system-wide AI translation & inline rewrite"
-            VALUE "FileVersion", "0.2.0"
+            VALUE "FileVersion", "0.2.1"
             VALUE "InternalName", "TypeTide-Win"
             VALUE "LegalCopyright", "Copyright (c) 2026 everettjf; TypeTide-Win contributors. MIT License"
             VALUE "OriginalFilename", "TypeTide-Win.exe"
             VALUE "ProductName", "TypeTide-Win"
-            VALUE "ProductVersion", "0.2.0"
+            VALUE "ProductVersion", "0.2.1"
         END
     END
     BLOCK "VarFileInfo"

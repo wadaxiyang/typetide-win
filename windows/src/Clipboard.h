@@ -12,7 +12,8 @@ namespace clipboard {
 std::optional<std::wstring> GetText();
 
 /// 写入文本
-bool SetText(const std::wstring& text);
+// UI callers pass retry=false to avoid sleeping in the message loop.
+bool SetText(const std::wstring& text, bool retry = true);
 
 /// 剪贴板序列号（变化说明有新内容写入）
 DWORD SequenceNumber();

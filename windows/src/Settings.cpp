@@ -46,6 +46,101 @@ void Settings::ensureProviders() {
     providersConfigured = true;
 }
 
+const wchar_t* FeatureName(Feature f) {
+    switch (f) {
+    case Feature::Selection: return L"Selection translation";
+    case Feature::Rewrite: return L"Rewrite & replace";
+    default: return L"Input translation";
+    }
+}
+Hotkey& Settings::shortcut(Feature f) {
+    return f == Feature::Selection ? readShortcut : f == Feature::Rewrite ? rewriteShortcut : inputShortcut;
+}
+const Hotkey& Settings::shortcut(Feature f) const {
+    return f == Feature::Selection ? readShortcut : f == Feature::Rewrite ? rewriteShortcut : inputShortcut;
+}
+std::vector<ProviderConfig> Settings::providersFor(const FeatureConfig& config) const {
+    auto list = effectiveProviders();
+    if (!config.providerId.empty())
+        for (const auto& p : list) if (p.id == config.providerId) return {p};
+    return list;
+}
+bool Settings::providerMissing(const FeatureConfig& config) const {
+    if (config.providerId.empty()) return false;
+    for (const auto& p : effectiveProviders()) if (p.id == config.providerId) return false;
+    return true;
+}
+bool ProviderIsLocal(const ProviderConfig& provider) {
+    const auto url = util::ToLower(util::Widen(provider.baseURL));
+    const auto scheme = url.find(L"://");
+    if (scheme == std::wstring::npos || (url.substr(0, scheme) != L"http" && url.substr(0, scheme) != L"https")) return false;
+    const auto authority = url.substr(scheme + 3, url.find_first_of(L"/?#", scheme + 3) - (scheme + 3));
+    if (authority.empty() || authority.find(L'@') != std::wstring::npos) return false;
+    const auto host = authority.front() == L'[' ? authority.substr(0, authority.find(L']') + 1)
+                                             : authority.substr(0, authority.find(L':'));
+    return host == L"localhost" || host == L"127.0.0.1" || host == L"[::1]";
+}
+std::wstring Settings::providerSummary(const FeatureConfig& config) const {
+    std::wstring result = providerMissing(config) ? L"Provider removed; using default: "
+        : config.providerId.empty() ? L"Default: " : L"";
+    const auto list = providersFor(config);
+    if (list.empty()) return result + L"No providers configured";
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (i) result += L" → ";
+        const auto& p = list[i];
+        const bool local = ProviderIsLocal(p);
+        result += util::Widen(p.name + " · " + p.model) + (local ? L" (local)" : L" (network)");
+    }
+    return result;
+}
+std::wstring Settings::languageLabel(int value, bool source) const {
+    if (value == kLanguageAuto) return source ? L"Auto detect" : L"Auto · bidirectional";
+    if (value == kLanguageNative) return L"Native · " + lang::ShortName(nativeLanguage);
+    if (value == kLanguageForeign) return L"Foreign · " + lang::ShortName(foreignLanguage);
+    if (value == kLanguageSame) return L"Keep original language";
+    return lang::ShortName(static_cast<Language>(value));
+}
+ResolvedDirection Settings::resolveFeature(const std::wstring& text, Feature f, const FeatureConfig& c) const {
+    auto fixed = [&](int value) { return value == kLanguageNative ? nativeLanguage :
+        value == kLanguageForeign ? foreignLanguage : static_cast<Language>(value); };
+    auto source = c.source == kLanguageAuto ? lang::Detect(text) : std::optional<Language>(fixed(c.source));
+    Language target;
+    if (c.target == kLanguageSame) target = source.value_or(nativeLanguage);
+    else if (c.target != kLanguageAuto) target = fixed(c.target);
+    else if (source == nativeLanguage) target = foreignLanguage;
+    else if (source == foreignLanguage) target = nativeLanguage;
+    else target = f == Feature::Selection ? nativeLanguage : foreignLanguage;
+    return {source, target};
+}
+void Settings::migrateFeatures() {
+    auto migrate = [&](Feature f, TranslationDirection direction, RewriteStyle style, ShortcutAction action) {
+        auto& c = feature(f);
+        c.style = style;
+        if (direction == TranslationDirection::NativeToForeign) { c.source = kLanguageNative; c.target = kLanguageForeign; }
+        if (direction == TranslationDirection::ForeignToNative) { c.source = kLanguageForeign; c.target = kLanguageNative; }
+        if (action == ShortcutAction::NativePopup || action == ShortcutAction::NativeReplace) { c.source = kLanguageAuto; c.target = kLanguageNative; }
+        if (action == ShortcutAction::ForeignPopup || action == ShortcutAction::ForeignReplace) { c.source = kLanguageAuto; c.target = kLanguageForeign; }
+    };
+    const bool readReplaces = static_cast<int>(readShortcutAction) >= 3;
+    const bool rewriteReplaces = static_cast<int>(rewriteShortcutAction) >= 3;
+    if (readReplaces && !rewriteReplaces) {
+        std::swap(readShortcut, rewriteShortcut);
+        std::swap(readShortcutAction, rewriteShortcutAction);
+        featureMigrationNotice = "Your shortcuts were moved to the features they previously performed.";
+    } else if (readReplaces || !rewriteReplaces) {
+        // A feature now has one shortcut. Preserve the binding already belonging
+        // to that feature and retain the other in its original slot; explain it.
+        featureMigrationNotice = "Legacy shortcuts both targeted one action. Keys were retained, but now each key runs its named feature. Review them below.";
+    }
+    migrate(Feature::Selection, readDirection, readStyle, readShortcutAction);
+    migrate(Feature::Rewrite, rewriteDirection, rewriteStyle, rewriteShortcutAction);
+    if (inputShortcut.isConfigured() && (inputShortcut == readShortcut || inputShortcut == rewriteShortcut)) {
+        inputShortcut = {0, 0};
+        if (!featureMigrationNotice.empty()) featureMigrationNotice += " ";
+        featureMigrationNotice += "Alt+Q is already used by an existing feature. Input translation is available from the tray; choose its shortcut in Features.";
+    }
+}
+
 std::wstring Hotkey::displayString() const {
     if (!isConfigured()) return L"Not set";
     std::wstring s;
@@ -187,6 +282,7 @@ void Settings::load() {
     };
     loadHotkey("readShortcut", readShortcut);
     loadHotkey("rewriteShortcut", rewriteShortcut);
+    loadHotkey("inputShortcut", inputShortcut);
     auto loadAction = [&](const char* key, ShortcutAction fallback) {
         const std::string value = str(key, "");
         if (value == "nativePopup") return ShortcutAction::NativePopup;
@@ -207,6 +303,29 @@ void Settings::load() {
     rewritePreview = boolean("rewritePreview", rewritePreview);
     if (auto s2 = lang::StyleFromCode(str("readStyle", ""))) readStyle = *s2;
     if (auto s2 = lang::StyleFromCode(str("rewriteStyle", ""))) rewriteStyle = *s2;
+
+    features = Settings{}.features;
+    featureMigrationNotice.clear();
+    if (!root["features"].isObject()) migrateFeatures();
+    else {
+        const char* names[] = {"selection", "rewrite", "input"};
+        for (size_t i = 0; i < features.size(); ++i) {
+            auto& c = features[i];
+            const auto& v = root["features"][names[i]];
+            auto validLanguage = [](int value, bool source) {
+                return (value >= 0 && value < (int)std::size(lang::All)) ||
+                    value == kLanguageAuto || value == kLanguageNative || value == kLanguageForeign ||
+                    (!source && value == kLanguageSame);
+            };
+            int source = v["source"].asInt(c.source), target = v["target"].asInt(c.target);
+            if (validLanguage(source, true)) c.source = source;
+            if (validLanguage(target, false)) c.target = target;
+            if (auto style = lang::StyleFromCode(v["style"].asString())) c.style = *style;
+            c.providerId = v["providerId"].asString().substr(0, 80);
+            c.prompt = v["prompt"].asString().substr(0, 32000);
+        }
+        featureMigrationNotice = str("featureMigrationNotice", "");
+    }
 
     skipApps.clear();
     if (const json::Array* arr = root["skipApps"].array())
@@ -272,6 +391,16 @@ bool Settings::save() const {
     };
     root["readShortcut"] = hotkeyJson(readShortcut);
     root["rewriteShortcut"] = hotkeyJson(rewriteShortcut);
+    root["inputShortcut"] = hotkeyJson(inputShortcut);
+    json::Object featureJson;
+    const char* featureNames[] = {"selection", "rewrite", "input"};
+    for (size_t i = 0; i < features.size(); ++i) {
+        const auto& c = features[i];
+        featureJson[featureNames[i]] = json::Object{{"source", c.source}, {"target", c.target},
+            {"style", lang::StyleCode(c.style)}, {"providerId", c.providerId}, {"prompt", c.prompt}};
+    }
+    root["features"] = std::move(featureJson);
+    root["featureMigrationNotice"] = featureMigrationNotice;
     auto actionCode = [](ShortcutAction action) -> std::string {
         switch (action) {
         case ShortcutAction::NativePopup: return "nativePopup";
@@ -318,13 +447,9 @@ bool Settings::save() const {
             return false;
         }
     }
-    // 杀毒软件/索引器可能短暂占用目标文件，做有限重试但不阻塞太久。
-    for (int attempt = 0; attempt < 4; ++attempt) {
-        if (MoveFileExW(tmp.c_str(), path.c_str(),
-                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-            return true;
-        if (attempt < 3) Sleep(15 * (attempt + 1));
-    }
+    // Saving may run on the UI thread. Never sleep/retry inside the message loop.
+    if (MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        return true;
     util::Log("settings: atomic replace failed (%lu)", GetLastError());
     DeleteFileW(tmp.c_str());
     return false;

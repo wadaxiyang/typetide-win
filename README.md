@@ -13,6 +13,7 @@ The upstream project is credited as a reference under its original MIT license.
 ## Features
 
 - **Read — Alt+D:** select text to display a complete translation beside it after a loading indicator.
+- **Input — Alt+Q:** open a persistent input/translation window. Ctrl+Enter translates, ⇄ swaps languages, and Copy copies the result. Esc hides the window and preserves its draft for this session.
 - **Write — Alt+R:** translate and replace your input in place, preserving native Ctrl+Z undo.
 - Optional floating selection icon and automatic translation.
 - Copy, replace, or change the target language in the popup.
@@ -49,8 +50,18 @@ providers in the list for local-only translation. Each provider's API key is sto
 separately in Windows Credential Manager. Existing single-provider settings migrate
 to the first list entry without losing the URL, model or key.
 
-The sidebar groups settings into General, Providers, Translation (languages,
-directions and styles), Shortcuts & triggers, Excluded apps, and About & diagnostics.
+The sidebar groups settings into General, Providers, **Features**, Excluded apps,
+and About & diagnostics. Set your native/common foreign languages once in General.
+Each feature has its own shortcut, source/target rule, provider, output style and
+editable prompt with `{source}`, `{target}` and `{style}` placeholders. Restore the
+default prompt at any time; feature changes use Save/Cancel. Input translation
+starts with native → foreign; Keep original language supports same-language rewriting.
+
+Features follow the default provider order unless a specific provider is selected.
+A removed provider falls back to the default order, with its status shown in settings.
+Provider selection and routing details live in settings; translation popups focus on
+text and language. Temporary language choices do not change feature defaults.
+Shortcut availability appears on each card.
 
 Selection capture uses UI Automation, with a temporary Ctrl+C fallback that
 restores text clipboard contents afterward. This fallback does not preserve
@@ -66,7 +77,7 @@ from this fork's [Releases](../../releases), or build from source below.
 1. Start TypeTide-Win and open Settings from the tray.
 2. Add providers, set their priority and use **Test selected**.
 3. Choose your native/foreign languages and verify the shortcuts.
-4. Select text and press Alt+D to read or Alt+R to translate and replace it.
+4. Select text and press Alt+D to read or Alt+R to translate and replace it; use Alt+Q (or the tray menu) to type a translation.
 
 Settings and crash reports use `%APPDATA%\TypeTide-Win\`. This fork has its own
 installer identity, startup entry and credentials, separate from upstream TypeTide.
