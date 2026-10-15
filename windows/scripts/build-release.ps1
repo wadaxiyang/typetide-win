@@ -58,6 +58,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Regression tests failed' }
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 $setup = Join-Path $win "build\TypeTide-Win-Setup-$version.exe"
 
+# Exercise the packaged installer against both the old tray shutdown behavior
+# and the current app before publishing. CI is disposable; never install on a developer's PC.
+if ($env:CI -eq 'true' -and $env:GITHUB_ACTIONS -eq 'true') {
+    & (Join-Path $PSScriptRoot 'test-installer-upgrade.ps1') -Setup $setup `
+        -LegacyFixture (Join-Path $win 'build\TypeTide-LegacyTrayFixture.exe') -Version $version
+}
+
 # --- 便携 zip ---
 $zip = Join-Path $win "build\TypeTide-Win-Windows-$version.zip"
 Compress-Archive -Path $exe, (Join-Path $root 'LICENSE') -DestinationPath $zip -Force

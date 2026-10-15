@@ -28,7 +28,11 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-CloseApplications=yes
+; New versions exit on WM_ENDSESSION. Older tray hosts ignore that message;
+; Restart Manager must be allowed to terminate them after its grace period.
+; Register only the executable being replaced, never processes by image name.
+CloseApplications=force
+CloseApplicationsFilter=TypeTide-Win.exe
 RestartApplications=no
 DisableProgramGroupPage=yes
 

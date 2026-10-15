@@ -20,27 +20,13 @@ jobs:
           fi
 
   windows:
-    name: Windows build + self-test
+    name: Windows build + installer upgrade tests
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake -B build -A x64
-        working-directory: windows
-      - name: Build
-        run: cmake --build build --config Release
-        working-directory: windows
-      - name: Self-test
+      - name: Build, self-test, regressions, package and upgrade smoke tests
         shell: pwsh
-        run: |
-          # GUI 子系统 exe：& 调用不等待、$LASTEXITCODE 不更新，必须 Start-Process -Wait
-          $env:TYPETIDE_DATA_DIR = "$env:RUNNER_TEMP\typetide-win-ci"
-          $p = Start-Process -FilePath windows\build\Release\TypeTide-Win.exe `
-              -ArgumentList '--selftest' -WindowStyle Hidden -Wait -PassThru
-          exit $p.ExitCode
-
-      - name: Popup and provider routing regression tests
-        run: ctest --test-dir windows/build -C Release --output-on-failure
+        run: ./windows/scripts/build-release.ps1
 
       - name: Verify Windows version metadata
         shell: pwsh
@@ -53,7 +39,7 @@ jobs:
           if ($manifest.assembly.assemblyIdentity.version -ne "$version.0") {
             throw "Manifest version does not match VERSION"
           }
-          $info = (Get-Item windows/build/Release/TypeTide-Win.exe).VersionInfo
+          $info = (Get-Item windows/build/TypeTide-Win.exe).VersionInfo
           if ($info.ProductName -ne 'TypeTide-Win' -or $info.ProductVersion -ne $version) {
             throw "Executable branding/version does not match"
           }

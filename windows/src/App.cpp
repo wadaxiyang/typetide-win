@@ -421,6 +421,19 @@ void App::showErrorPopup(const std::wstring& original, Language target, RECT anc
 
 LRESULT App::handle(UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+    case WM_QUERYENDSESSION:
+        // Restart Manager asks first; a later cancellation must leave the app running.
+        return TRUE;
+
+    case WM_ENDSESSION:
+        if (wp) quit();
+        return 0;
+
+    case WM_CLOSE:
+        // Closing the tray host must release the executable, not just destroy its window.
+        quit();
+        return 0;
+
     case WM_HOTKEY:
         if (SettingsWindow::recordingShortcut()) return 0;
         if (wp == kReadHotkeyId) handleRead();
